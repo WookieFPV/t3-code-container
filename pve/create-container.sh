@@ -206,11 +206,18 @@ pct exec "$CTID" -- rm -f /tmp/provision.tar.gz
 rm -f /tmp/provision-"$CTID".tar.gz
 
 log "provisioning with profile '$PROFILE'"
-pct exec "$CTID" -- env "TIMEZONE=$TIMEZONE" /opt/provision/setup.sh --profile "$PROFILE"
+# PVE_CTID lets setup.sh's closing notes say `pct enter` — its shell commands
+# are meant for inside the container, but we are printing them on the host.
+pct exec "$CTID" -- env "TIMEZONE=$TIMEZONE" "PVE_CTID=$CTID" \
+    /opt/provision/setup.sh --profile "$PROFILE"
 
 cat <<EOF
 
 CT $CTID ($CT_HOSTNAME) is up on $ip and provisioned with '$PROFILE'.
+
+Get a shell inside it:
+
+    pct enter $CTID
 
 Re-provision at any time, from the host:
 

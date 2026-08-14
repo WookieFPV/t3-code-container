@@ -170,12 +170,19 @@ cat <<EOF
 Provisioning complete — re-run this any time; every role converges.
 
 EOF
+# When create-container.sh drove us over `pct exec`, the reader is sitting on
+# the hypervisor, not in the container — the shell commands below need a
+# `pct enter` first or they run against the host.
+enter_line=""
+[[ -n ${PVE_CTID:-} ]] &&
+    enter_line="    pct enter $PVE_CTID              # from the Proxmox host
+"
 if [[ -x $NPM_PREFIX/bin/first-login ]]; then
     cat <<EOF
 What is left needs a human at a browser: GitHub and t3 both use OAuth device
 codes. 'first-login' walks through those and does everything around them:
 
-    machinectl shell $APP_USER@      # or: ssh $APP_USER@<host>
+$enter_line    machinectl shell $APP_USER@      # or: ssh $APP_USER@<host>
     first-login
 
 See docs/design.md for what it does and the by-hand version.
@@ -184,6 +191,6 @@ else
     cat <<EOF
 Log in as the app user to start working:
 
-    machinectl shell $APP_USER@      # or: ssh $APP_USER@<host>
+$enter_line    machinectl shell $APP_USER@      # or: ssh $APP_USER@<host>
 EOF
 fi
