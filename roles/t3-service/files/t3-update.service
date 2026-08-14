@@ -1,0 +1,11 @@
+[Unit]
+Description=Update the t3 CLI and the pinned runtime behind t3code.service
+# network-online.target is a system target and cannot be ordered against from a
+# user unit. A catch-up run triggered by Persistent=true can therefore fire
+# before the network is up; the update then fails, logs, and leaves the running
+# version untouched, and the next nightly run picks it up.
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/.local/bin:%h/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=%h/.local/bin/t3-nightly-update.sh

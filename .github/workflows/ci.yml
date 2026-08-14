@@ -1,0 +1,111 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y shellcheck
+          # --severity=warning: the info level is style advice (prefer find over
+          # ls, quote a variable that is always a number) and blocking a merge on
+          # it trains people to stop reading the output. Warnings and errors are
+          # the ones that have ever been real here.
+          shellcheck --severity=warning --external-sources --source-path=SCRIPTDIR \
+            setup.sh \
+            lib/*.sh \
+            profiles/*.sh \
+            roles/*/install.sh \
+            roles/*/files/*.sh \
+            test/*.sh \
+            pve/*.sh
+      - name: unit tests
+        run: ./test/unit.sh
+
+  # The package-manager layer, on every family we claim to map names for. No
+  # systemd, so this is limited to the base role — which is exactly the role
+  # that touches package names, locales and timezones.
+  packages:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: "debian:12",          tier: 1 }
+          - { image: "debian:13",          tier: 1 }
+          - { image: "ubuntu:24.04",       tier: 1 }
+          - { image: "fedora:latest",      tier: 2 }
+          - { image: "archlinux:latest",   tier: 2 }
+    runs-on: ubuntu-latest
+    # Tier 2 is best effort by policy, so it reports without failing the build.
+    continue-on-error: ${{ matrix.tier == 2 }}
+    container:
+      image: ${{ matrix.image }}
+    steps:
+      - name: bootstrap enough to check out
+        shell: bash
+        run: |
+          set -eux
+          if   command -v apt-get >/dev/null; then apt-get update -qq && apt-get install -y git ca-certificates
+          elif command -v dnf     >/dev/null; then dnf install -y git
+          elif command -v pacman  >/dev/null; then pacman -Sy --noconfirm git
+          fi
+      - uses: actions/checkout@v4
+      - name: install base, twice
+        run: ./test/install-check.sh --only base
+
+  # The full minimal profile, which needs a real PID 1 — the app user's linger
+  # session and /run/user/UID do not exist without one. Tier 1 only.
+  systemd:
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["debian:12", "debian:13", "ubuntu:24.04"]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: build a systemd image
+        run: |
+          cat >Dockerfile.ci <<EOF
+          FROM ${{ matrix.image }}
+          ENV DEBIAN_FRONTEND=noninteractive
+          RUN apt-get update && apt-get install -y systemd systemd-sysv dbus git ca-certificates \
+              && rm -rf /var/lib/apt/lists/*
+          CMD ["/sbin/init"]
+          EOF
+          docker build -f Dockerfile.ci -t provision-ci .
+      - name: boot it
+        run: |
+          docker run -d --name ci --privileged --cgroupns=host \
+            -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
+            -v "$PWD:/repo" -w /repo provision-ci
+          # systemd needs a moment before loginctl will answer. "degraded" is a
+          # non-zero exit but a perfectly usable boot in a container, where a
+          # handful of units have nothing to manage — so match on the word.
+          for _ in $(seq 60); do
+            state=$(docker exec ci systemctl is-system-running 2>/dev/null || true)
+            case $state in running|degraded) break ;; esac
+            sleep 1
+          done
+          echo "system state: ${state:-unknown}"
+          case ${state:-} in running|degraded) ;; *) docker logs ci; exit 1 ;; esac
+          docker exec ci systemctl --version | head -1
+      - name: install the minimal profile, twice
+        run: docker exec ci ./test/install-check.sh --profile minimal
+      - name: the app user has a working systemd session
+        run: |
+          docker exec ci bash -c '
+            set -eux
+            id devuser
+            [ "$(loginctl show-user devuser -p Linger --value)" = yes ]
+            test -d /run/user/$(id -u devuser)
+            runuser -u devuser -- env XDG_RUNTIME_DIR=/run/user/$(id -u devuser) \
+              systemctl --user is-system-running --wait
+          '
+      - name: teardown
+        if: always()
+        run: docker rm -f ci || true

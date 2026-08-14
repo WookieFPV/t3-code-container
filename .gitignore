@@ -1,0 +1,18 @@
+# Nothing here is built or installed locally — this list exists to keep local
+# scratch and credentials from ever reaching a public repo by accident.
+*.env
+.env*
+*.pem
+*.key
+id_ed25519*
+id_rsa*
+authorized_keys
+
+# CI scratch (pve/create-container.sh and the systemd job write these)
+Dockerfile.ci
+provision-*.tar.gz
+
+# Editor and OS noise
+.DS_Store
+*.swp
+*~
