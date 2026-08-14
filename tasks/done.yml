@@ -1,0 +1,47 @@
+---
+# Shared post_tasks: what to do next, printed at the end of every profile.
+#
+# Worth keeping from the bash version, because the two steps that cannot be
+# automated — GitHub's and t3's OAuth device codes — are precisely the ones
+# somebody finishing a provisioning run does not yet know about.
+#
+# pve_ctid is set by pve/create-container.sh, which drives this over `pct exec`
+# from the hypervisor: the reader is then sitting on the Proxmox host, and the
+# shell commands below need a `pct enter` first or they run against the host.
+
+- name: Is the guided first-login helper installed?
+  ansible.builtin.stat:
+    path: "{{ npm_prefix }}/bin/first-login"
+  register: first_login_bin
+  tags: always
+
+- name: What is left to do — with the first-login helper
+  ansible.builtin.debug:
+    msg: |-
+      Provisioning complete — re-run this any time; every role converges.
+
+      What is left needs a human at a browser: GitHub and t3 both use OAuth
+      device codes. 'first-login' walks through those and does everything
+      around them:
+      {% if pve_ctid | default('') %}
+          pct enter {{ pve_ctid }}              # from the Proxmox host
+      {% endif %}
+          machinectl shell {{ app_user }}@      # or: ssh {{ app_user }}@<host>
+          first-login
+
+      See docs/design.md for what it does and the by-hand version.
+  when: first_login_bin.stat.exists
+  tags: always
+
+- name: What is left to do — without it
+  ansible.builtin.debug:
+    msg: |-
+      Provisioning complete — re-run this any time; every role converges.
+
+      Log in as the app user to start working:
+      {% if pve_ctid | default('') %}
+          pct enter {{ pve_ctid }}              # from the Proxmox host
+      {% endif %}
+          machinectl shell {{ app_user }}@      # or: ssh {{ app_user }}@<host>
+  when: not first_login_bin.stat.exists
+  tags: always

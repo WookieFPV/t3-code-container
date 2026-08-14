@@ -1,0 +1,30 @@
+---
+# GitHub CLI, from the vendor repo where the distribution lags.
+
+- name: From the vendor repository on Debian
+  ansible.builtin.include_tasks: vendor-repo.yml
+  when: ansible_os_family == 'Debian'
+
+# Fedora/RHEL and Arch both ship a current gh in their own repositories. Arch
+# calls the package github-cli.
+- name: From the distribution elsewhere
+  ansible.builtin.package:
+    name: "{{ 'github-cli' if ansible_os_family == 'Archlinux' else 'gh' }}"
+    state: present
+  when: ansible_os_family != 'Debian'
+
+- name: Check it landed
+  ansible.builtin.include_role:
+    name: preflight
+  vars:
+    preflight_for: gh
+    preflight_commands: [gh]
+
+- name: Which gh is installed?
+  ansible.builtin.command: gh --version
+  register: gh_version
+  changed_when: false
+
+- name: Say so
+  ansible.builtin.debug:
+    msg: "{{ gh_version.stdout_lines | first }}"

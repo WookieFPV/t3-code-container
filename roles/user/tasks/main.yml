@@ -1,0 +1,160 @@
+---
+# Unprivileged app user, linger, home layout and shell environment.
+#
+# No sudo on purpose. Everything system-level is done by the playbook as root;
+# this account can only affect its own home directory, and every repo under it
+# has a remote. That is what makes it safe to let an agent run unattended here.
+
+- name: Preconditions
+  ansible.builtin.include_role:
+    name: preflight
+  vars:
+    preflight_for: user
+    preflight_systemd: true
+
+- name: Create the app user
+  ansible.builtin.user:
+    name: "{{ app_user }}"
+    shell: /bin/bash
+    create_home: true
+    comment: ""
+    # No usable password at all, rather than one that could be typed: the
+    # account is reached over SSH keys or `machinectl shell`.
+    password: "!"
+    # No supplementary groups. Deliberately not in sudo.
+    state: present
+  register: user_account
+
+# app_uid was read in the playbook's pre_tasks, before this account existed. On
+# a fresh box it is 0 there, and everything that runs as the app user builds
+# XDG_RUNTIME_DIR out of it — so re-read it now rather than an hour into the
+# run, when the first `systemctl --user` fails against /run/user/0.
+#
+# `default(app_uid)` for --check: the user module reports no uid for an account
+# it only pretended to create, and without the fallback a dry run against a
+# fresh box dies here rather than reporting what it would do.
+- name: Re-read the app user's uid
+  ansible.builtin.set_fact:
+    app_uid: "{{ user_account.uid | default(app_uid) }}"
+
+# --------------------------------------------------------------------- linger
+# Lingering is what lets the user's units run without an active login, i.e. the
+# server starts at boot and survives you logging out. Later roles run
+# `systemctl --user`, which needs /run/user/UID to exist.
+- name: Is linger already enabled?
+  ansible.builtin.command: "loginctl show-user {{ app_user }} -p Linger --value"
+  register: user_linger
+  changed_when: false
+  failed_when: false
+
+- name: Enable linger
+  ansible.builtin.command: "loginctl enable-linger {{ app_user }}"
+  when: user_linger.stdout | trim != 'yes'
+  changed_when: true
+
+# Wait for the user manager rather than racing it: enable-linger returns before
+# logind has finished opening the session.
+- name: Wait for the app user's systemd session
+  ansible.builtin.wait_for:
+    path: "/run/user/{{ app_uid }}"
+    state: present
+    timeout: 15
+  register: user_runtime_dir
+  failed_when: false
+
+- name: Explain a missing runtime directory
+  ansible.builtin.assert:
+    that: not user_runtime_dir.failed | default(false)
+    fail_msg: >-
+      /run/user/{{ app_uid }} never appeared. In an LXC container this is
+      usually the missing 'nesting' feature (Proxmox: Container -> Options ->
+      Features -> Nesting, then reboot). On a very minimal image, check that
+      dbus and the systemd PAM module are installed — logind cannot open a user
+      session without them. The base role installs both.
+    quiet: true
+
+# ----------------------------------------------------------------- ssh access
+- name: The app user's .ssh
+  ansible.builtin.file:
+    path: "{{ app_home }}/.ssh"
+    state: directory
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: "0700"
+
+# Seed the app user's authorized_keys from root's, which the container creation
+# step populated. Without this you can only reach the account by logging in as
+# root first — and `ssh <app_user>@host` is the better route anyway, because it
+# creates a real systemd login session, so `systemctl --user` just works.
+- name: Seed authorized_keys from root
+  when: seed_authorized_keys | bool
+  block:
+    - name: Does root have any authorized keys?
+      ansible.builtin.stat:
+        path: /root/.ssh/authorized_keys
+      register: user_root_keys
+
+    - name: Copy root's authorized_keys to the app user
+      ansible.builtin.copy:
+        src: /root/.ssh/authorized_keys
+        dest: "{{ app_home }}/.ssh/authorized_keys"
+        remote_src: true
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        mode: "0600"
+      when: user_root_keys.stat.exists and user_root_keys.stat.size > 0
+
+    - name: Warn when there are none
+      ansible.builtin.debug:
+        msg: >-
+          WARNING: /root/.ssh/authorized_keys is empty — {{ app_user }} will
+          have no SSH access. Reach it with 'machinectl shell {{ app_user }}@'
+          from root instead.
+      when: not (user_root_keys.stat.exists and user_root_keys.stat.size > 0)
+
+- name: Note that authorized_keys were not seeded
+  ansible.builtin.debug:
+    msg: "seed_authorized_keys is false — not copying root's keys"
+  when: not seed_authorized_keys | bool
+
+# ------------------------------------------------------------------ home tree
+# Every component is listed, not just the leaves, and that is the entire point.
+# `install -d -o devuser ~/.local/bin` applies the ownership to `bin` only and
+# leaves ~/.local itself root:root — invisible for as long as everything writes
+# *inside* the leaf, and then Claude Code's installer tries to create
+# ~/.local/share and dies with EACCES. Listing the parents also repairs a
+# container provisioned before this was understood, because `file:` chowns
+# directories that already exist. See docs/design.md.
+- name: The app user's home directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: "0755"
+  loop: "{{ [app_home ~ '/code'] + npm_prefix_dirs }}"
+
+# -------------------------------------------------------- shell environment
+- name: The app user's .bashrc exists
+  ansible.builtin.file:
+    path: "{{ app_home }}/.bashrc"
+    state: touch
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: "0644"
+    # `touch` is "changed" every single run otherwise, and this role is one of
+    # the two the idempotency test covers on every distribution.
+    modification_time: preserve
+    access_time: preserve
+
+# XDG_RUNTIME_DIR is what makes `systemctl --user` work over a plain SSH session.
+- name: The app user's shell environment
+  ansible.builtin.lineinfile:
+    path: "{{ app_home }}/.bashrc"
+    line: "{{ item }}"
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: "0644"
+  loop:
+    - 'export PATH="$HOME/.local/bin:$PATH"'
+    - 'export XDG_RUNTIME_DIR=/run/user/$(id -u)'

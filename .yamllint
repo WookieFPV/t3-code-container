@@ -1,0 +1,36 @@
+---
+# yamllint, tuned for playbooks that carry a lot of prose.
+#
+# The comments in this repo are the documentation — the reasoning that would
+# otherwise only exist in a commit message nobody reads. So the rules that fight
+# long explanatory comments are relaxed, and the ones that catch real YAML
+# mistakes are not.
+
+extends: default
+
+ignore: |
+  .github/
+
+rules:
+  # Task names and fail_msg strings are prose. Wrapping them to 80 would mean
+  # breaking sentences at arbitrary points.
+  line-length:
+    max: 100
+    allow-non-breakable-words: true
+    allow-non-breakable-inline-mappings: true
+
+  # `- {role: base, tags: [base]}` is more readable as a role list than four
+  # lines per role, and the flow form is deliberate there.
+  braces:
+    max-spaces-inside: 0
+  brackets:
+    max-spaces-inside: 0
+
+  comments:
+    require-starting-space: true
+    min-spaces-from-content: 1
+
+  # Ansible convention: `true`/`false`, not `yes`/`no`.
+  truthy:
+    allowed-values: ["true", "false"]
+    check-keys: false

@@ -1,0 +1,7 @@
+---
+# Rolling release, so this is current by definition.
+
+- name: Install Node.js and npm
+  ansible.builtin.package:
+    name: [nodejs, npm]
+    state: present

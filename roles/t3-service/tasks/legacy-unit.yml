@@ -1,0 +1,38 @@
+---
+# Earlier versions of this repo shipped a hand-rolled t3.service. Leaving it
+# behind next to t3code.service is the worst outcome available: two servers
+# sharing one ~/.t3 — one SQLite database, one secret store, one
+# server-runtime.json between two writers — and two cloudflared connectors
+# registered for the same tunnel, so the relay sends the app to whichever it
+# picks. That fails while every local check still reads healthy.
+#
+# See "Two servers, one environment" in docs/design.md.
+
+- name: Is a legacy t3.service still installed?
+  ansible.builtin.stat:
+    path: "{{ t3_service_unit_dir }}/t3.service"
+  register: t3_legacy_unit
+
+- name: Remove it
+  when: t3_legacy_unit.stat.exists
+  block:
+    - name: Say why
+      ansible.builtin.debug:
+        msg: >-
+          Removing the legacy hand-rolled t3.service — this box runs t3's own
+          t3code.service now. Two server units against one ~/.t3 is what breaks
+          the app's connection while 'is-active' still says active.
+
+    - name: Stop and disable it
+      ansible.builtin.command: systemctl --user disable --now t3.service
+      become: true
+      become_user: "{{ app_user }}"
+      environment: "{{ app_user_env }}"
+      changed_when: true
+      failed_when: false
+
+    - name: Delete the unit file
+      ansible.builtin.file:
+        path: "{{ t3_service_unit_dir }}/t3.service"
+        state: absent
+      notify: Reload the app user's systemd manager

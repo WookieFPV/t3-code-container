@@ -1,0 +1,25 @@
+---
+# description: Base packages and an unprivileged app user
+#
+# The smallest useful box: base packages and an unprivileged app user with a
+# working systemd user session. Everything else is opt-in.
+#
+# Also what CI installs on every supported distribution, because it exercises
+# the two roles every other role depends on.
+
+- name: Minimal provisioned box
+  hosts: all
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: Preflight
+      ansible.builtin.import_tasks: ../tasks/preflight.yml
+
+  roles:
+    - {role: base, tags: [base]}
+    - {role: user, tags: [user]}
+
+  post_tasks:
+    - name: Done
+      ansible.builtin.import_tasks: ../tasks/done.yml

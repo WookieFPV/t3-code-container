@@ -1,0 +1,41 @@
+---
+# Debian 12 ships gh 2.23 (Feb 2023). Upstream is used instead so
+# `gh auth login` and its device flow are current — that is the whole account
+# setup path.
+
+- name: GitHub CLI signing key
+  ansible.builtin.include_role:
+    name: keyring
+  vars:
+    keyring_name: GitHub CLI
+    keyring_url: https://cli.github.com/packages/githubcli-archive-keyring.gpg
+    keyring_dest: "{{ gh_keyring }}"
+    keyring_fingerprints: "{{ gh_keyring_fingerprints }}"
+
+- name: GitHub CLI repository
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/github-cli.sources
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      Types: deb
+      URIs: https://cli.github.com/packages
+      Suites: stable
+      Components: main
+      Architectures: {{ apt_arch }}
+      Signed-By: {{ gh_keyring }}
+  register: gh_repo
+
+- name: Refresh the apt index for the new repository
+  ansible.builtin.apt:
+    update_cache: true
+  when: gh_repo.changed
+
+# `state: latest` for the same reason as nodejs: `present` would leave a
+# distribution gh that is three years old in place, which is the one thing this
+# vendor repository exists to avoid.
+- name: Install gh from the vendor repository  # noqa package-latest
+  ansible.builtin.apt:
+    name: gh
+    state: latest

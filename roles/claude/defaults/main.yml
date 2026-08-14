@@ -1,0 +1,15 @@
+---
+# What Claude Code starts on in a fresh container. Empty means "leave the
+# account default alone", which is the right neutral behaviour for this repo; a
+# profile that wants something else sets these (playbooks/t3.yml does).
+#
+# Model IDs age faster than anything else here. `/model` in a session lists what
+# the account can actually reach, and a name it cannot use falls back to the
+# account default rather than failing loudly — so check there after changing it,
+# not by re-reading the file.
+claude_model: ""
+
+# low | medium | high | xhigh
+claude_effort_level: ""
+
+claude_settings_file: "{{ app_home }}/.claude/settings.json"

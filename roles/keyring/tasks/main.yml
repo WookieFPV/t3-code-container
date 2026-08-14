@@ -1,0 +1,86 @@
+---
+# Download a vendor signing key, verify it against pinned fingerprints, and only
+# then put it where the package manager will read it.
+#
+# The order is the whole point, and it is why this is not `get_url` straight to
+# /usr/share/keyrings: nothing untrusted is ever written somewhere apt trusts.
+# An already-installed keyring is re-verified on every run, so a key swapped out
+# underneath us is caught too.
+#
+# Usage:
+#
+#   - name: NodeSource signing key
+#     ansible.builtin.include_role:
+#       name: keyring
+#     vars:
+#       keyring_name: NodeSource
+#       keyring_url: https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key
+#       keyring_dest: /usr/share/keyrings/nodesource.asc
+#       keyring_fingerprints: [6F71F525282841EEDAF851B42F59B5F99B1BE0B4]
+#
+# The bytes the vendor serves are installed verbatim, armored or not — apt has
+# accepted ASCII-armored keyrings in Signed-By for years, so nothing here has to
+# dearmor and no role has to know which form its vendor ships. Name the
+# destination for what arrives (.asc armored, .gpg binary) and it is self
+# documenting.
+
+- name: "{{ keyring_name }}: preconditions"
+  ansible.builtin.include_role:
+    name: preflight
+  vars:
+    preflight_for: "keyring ({{ keyring_name }})"
+    preflight_commands: [gpg]
+
+- name: "{{ keyring_name }}: the verification script"
+  ansible.builtin.copy:
+    src: verify-keyring.sh
+    dest: /usr/local/lib/verify-keyring.sh
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: "{{ keyring_name }}: is the keyring already installed?"
+  ansible.builtin.stat:
+    path: "{{ keyring_dest }}"
+  register: keyring_installed
+
+- name: "{{ keyring_name }}: download the signing key for inspection"
+  ansible.builtin.get_url:
+    url: "{{ keyring_url }}"
+    dest: "{{ keyring_candidate }}"
+    owner: root
+    group: root
+    mode: "0600"
+    force: true
+  when: not keyring_installed.stat.exists
+  # Nothing the package manager reads has changed yet: this is a candidate in
+  # root's home, and the install task below is what counts as the change.
+  changed_when: false
+
+# Each fingerprint has to be its own argv element — the script compares them
+# one at a time, and a single space-joined argument would only ever match a
+# vendor that ships exactly the pinned keys in exactly the pinned order.
+- name: "{{ keyring_name }}: verify the fingerprints before trusting anything"
+  ansible.builtin.command:
+    argv: >-
+      {{ ['/usr/local/lib/verify-keyring.sh',
+          keyring_installed.stat.exists | ternary(keyring_dest, keyring_candidate),
+          keyring_name] + keyring_fingerprints }}
+  changed_when: false
+
+- name: "{{ keyring_name }}: install the verified keyring"
+  ansible.builtin.copy:
+    src: "{{ keyring_candidate }}"
+    dest: "{{ keyring_dest }}"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0644"
+  when: not keyring_installed.stat.exists
+
+- name: "{{ keyring_name }}: drop the candidate"
+  ansible.builtin.file:
+    path: "{{ keyring_candidate }}"
+    state: absent
+  when: not keyring_installed.stat.exists
+  changed_when: false

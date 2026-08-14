@@ -1,0 +1,94 @@
+---
+# Generate a UTF-8 locale and make it the default.
+#
+# A stock container image generates no locales, but `pct enter` and ssh both
+# carry LANG in from wherever you came from — so every package operation answers
+# with a wall of "locale: Cannot set LC_CTYPE" and perl "Falling back to the
+# standard locale". Harmless, but it buries real output.
+
+- name: Which locales are generated?
+  ansible.builtin.command: locale -a
+  register: base_locales
+  changed_when: false
+  failed_when: false
+
+- name: Is the one we want among them?
+  ansible.builtin.set_fact:
+    locale_is_generated: >-
+      {{ (locale.split('.')[0] ~ '.utf8') | lower
+         in (base_locales.stdout_lines | map('lower') | list) }}
+
+- name: Generate the locale
+  when: base_locale_from_locale_gen | bool
+  block:
+    - name: List it in /etc/locale.gen
+      ansible.builtin.lineinfile:
+        path: /etc/locale.gen
+        line: "{{ locale }} UTF-8"
+        create: true
+        owner: root
+        group: root
+        mode: "0644"
+      register: base_locale_gen_line
+
+    # `locale -a` reports the generated form — en_US.utf8, not en_US.UTF-8. Both
+    # sides are lowercased before comparing: the haystack was already, and
+    # leaving the needle alone meant en_US.utf8 never matched en_us.utf8, so
+    # locale-gen ran on every single pass and no run was ever idempotent.
+    - name: Run locale-gen
+      ansible.builtin.command: locale-gen
+      when: base_locale_gen_line.changed or not locale_is_generated
+      changed_when: true
+
+- name: Warn when a RedHat langpack did not provide the locale
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: locale {{ locale }} is not available — install
+      glibc-langpack-{{ locale.split('_')[0] | lower }}.
+  when:
+    - not base_locale_from_locale_gen | bool
+    - not locale_is_generated
+
+# ------------------------------------------------------------- the default
+# Three possible homes, because which one is authoritative depends on the
+# distribution and on whether systemd is running. Checking only the Debian one
+# meant a Fedora box rewrote /etc/locale.conf on every run — harmless, but it is
+# exactly the sort of "converges except for this" that idempotency tests exist
+# to catch.
+- name: What is the default LANG now?
+  ansible.builtin.command:
+    argv:
+      - /bin/sh
+      - -c
+      - |
+        for f in /etc/default/locale /etc/locale.conf; do
+            [ -r "$f" ] || continue
+            # shellcheck disable=SC1090
+            LANG=''; . "$f" 2>/dev/null || true
+            if [ -n "${LANG:-}" ]; then printf '%s' "$LANG"; exit 0; fi
+        done
+        if command -v localectl >/dev/null 2>&1; then
+            localectl status 2>/dev/null | sed -n 's/.*LANG=\([^ ]*\).*/\1/p' | head -1
+        fi
+  register: base_lang_now
+  changed_when: false
+  failed_when: false
+
+- name: Set the default LANG
+  ansible.builtin.command:
+    argv:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        if command -v update-locale >/dev/null 2>&1; then
+            update-locale "LANG=$1"
+        elif command -v localectl >/dev/null 2>&1 && localectl set-locale "LANG=$1" 2>/dev/null; then
+            :
+        else
+            printf 'LANG=%s\n' "$1" >/etc/locale.conf
+        fi
+      - sh
+      - "{{ locale }}"
+  when: base_lang_now.stdout | trim != locale
+  changed_when: true

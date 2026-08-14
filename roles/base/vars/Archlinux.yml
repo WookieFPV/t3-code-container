@@ -1,0 +1,30 @@
+---
+# Package names for Arch. Tier 2: written to work, nothing tests it.
+# Keep in step with vars/Debian.yml when adding anything.
+#
+# Arch needs the `ansible` package rather than `ansible-core`, because
+# ansible.builtin.package resolves to community.general.pacman here — see the
+# comment in provision.sh.
+
+base_packages:
+  - bash-completion
+  - bind
+  - base-devel
+  - ca-certificates
+  - cronie
+  - curl
+  - dbus
+  - git
+  - gnupg
+  - htop
+  - jq
+  - systemd
+  - lsof
+  - nano
+  - openssh
+  - python
+  - unzip
+  - vim
+  - wget
+
+base_locale_from_locale_gen: true

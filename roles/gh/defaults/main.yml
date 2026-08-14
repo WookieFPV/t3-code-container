@@ -1,0 +1,14 @@
+---
+# Pinned signing keys for https://cli.github.com/packages.
+# Cross-check against
+# https://github.com/cli/cli/blob/trunk/docs/install_linux.md before changing.
+#   2C61...6059  rsa4096, created 2022-09-06, EXPIRES 2026-09-05
+#   7F38...3325  rsa4096, created 2026-04-07 — the rollover key
+# Both are shipped in the keyring today; when the first expires apt falls back
+# to the second, so the rollover needs no action.
+gh_keyring_fingerprints:
+  - 2C6106201985B60E6C7AC87323F3D4EA75716059
+  - 7F38BBB59D064DBCB3D84D725612B36462313325
+
+# Already a binary keyring upstream, hence .gpg rather than .asc.
+gh_keyring: /etc/apt/keyrings/githubcli-archive-keyring.gpg

@@ -1,0 +1,97 @@
+---
+# The t3 CLI, in the app user's own npm prefix.
+
+- name: Preconditions
+  ansible.builtin.include_role:
+    name: preflight
+  vars:
+    preflight_for: t3
+    preflight_commands: [node, npm]
+
+# Two checks, because there are two ways to get this wrong and they fail
+# differently. This one is about the setting: a profile that overrode
+# npm_allow_scripts without these produces a silently broken server, and it
+# should be stopped before anything is installed.
+- name: The profile must allow t3's native install scripts
+  ansible.builtin.assert:
+    that: t3_native_deps | difference(npm_allow_scripts.split(',')) | length == 0
+    fail_msg: >-
+      npm_allow_scripts is '{{ npm_allow_scripts }}' and does not include
+      {{ t3_native_deps | difference(npm_allow_scripts.split(',')) | join(', ') }}.
+      t3's pinned runtime is built by an install this repo does not run, so the
+      allowlist has to reach ~/.npmrc. Set
+      npm_allow_scripts: {{ t3_native_deps | join(',') }}
+      in your profile playbook and re-run './provision.sh --only node,t3'.
+    quiet: true
+
+# `--strict-allow-scripts` stats both halves of the npm prefix rather than
+# creating them on demand, so they must exist even when this role runs alone.
+- name: Every component of the npm prefix belongs to the app user
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: "0755"
+  loop: "{{ npm_prefix_dirs }}"
+
+# And this one is about the file. The assertion above checks the variable; what
+# the pinned-runtime build actually reads is the line in ~/.npmrc, and the two
+# diverge on a box whose .npmrc predates the setting. See the script's header —
+# it is the single most expensive failure mode in this repo.
+- name: The allow-scripts check
+  ansible.builtin.copy:
+    src: check-npmrc-allow-scripts.sh
+    dest: /usr/local/lib/check-npmrc-allow-scripts.sh
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: The app user's .npmrc must allow t3's native install scripts
+  ansible.builtin.command:
+    argv:
+      - /usr/local/lib/check-npmrc-allow-scripts.sh
+      - "{{ app_home }}/.npmrc"
+      - "{{ t3_native_deps | join(',') }}"
+  changed_when: false
+
+# --strict-allow-scripts turns any *other* blocked script into a hard error, so
+# a t3 release that adds a new native dependency stops the run rather than half
+# installing.
+#
+# The allowlist is deliberately not passed as an --allow-scripts flag: it lives
+# in ~/.npmrc, which npm 12 also consults for `npm install -g`, and which is the
+# only place the installs we never type will read it from. One source, so a
+# package allowed for the pinned runtime is allowed everywhere and a profile
+# cannot drift into two different lists.
+- name: Install t3
+  ansible.builtin.command:
+    argv:
+      - npm
+      - install
+      - -g
+      - "t3@{{ t3_version }}"
+      - --strict-allow-scripts
+      - --no-fund
+      - --no-audit
+  become: true
+  become_user: "{{ app_user }}"
+  environment: "{{ app_user_env }}"
+  # Run on every pass, like the bash version: with t3_version: latest there is
+  # no local answer to "is this current" that does not cost the same network
+  # round trip npm is about to make anyway. Not a change, because npm
+  # reinstalling the same version is not one.
+  changed_when: false
+
+- name: Which t3 is installed?
+  ansible.builtin.command: t3 --version
+  become: true
+  become_user: "{{ app_user }}"
+  environment: "{{ app_user_env }}"
+  register: t3_installed
+  changed_when: false
+  failed_when: false
+
+- name: Say so
+  ansible.builtin.debug:
+    msg: "t3 {{ t3_installed.stdout | default('installed') | trim }}"

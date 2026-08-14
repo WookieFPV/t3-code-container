@@ -1,0 +1,51 @@
+---
+# Shared pre_tasks, included by every profile playbook.
+#
+# Everything here carries `tags: always`, so it runs even when the play is
+# narrowed with --tags: a single-role repair run still has to refuse Alpine and
+# still needs app_uid to build the app user's environment.
+
+- name: Refuse a distribution where this design cannot work
+  ansible.builtin.assert:
+    that: os_tier | int != 0
+    fail_msg: >-
+      {{ ansible_distribution }} {{ ansible_distribution_version }} is not
+      supported. Every long-running part of this setup is a systemd *user* unit
+      — the app user's linger session, the server, the update timer — and this
+      distribution has no systemd. Supporting it means rewriting those as OpenRC
+      services running as root, which is a different design, not a port.
+    quiet: true
+  tags: always
+
+- name: Say what this is running on
+  ansible.builtin.debug:
+    msg: >-
+      {{ ansible_distribution }} {{ ansible_distribution_version }}
+      ({{ ansible_os_family }}/{{ ansible_pkg_mgr }}, {{ ansible_architecture }})
+      — tier {{ os_tier | int }}{{ ', tested' if os_tier | int == 1 else '' }}
+  tags: always
+
+- name: Warn when nothing tests this combination
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: tier 2. Nothing tests {{ ansible_distribution }}. The roles are
+      written to work here, but failures are expected to be reported rather
+      than already fixed.
+  when: os_tier | int == 2
+  tags: always
+
+# app_uid feeds XDG_RUNTIME_DIR in app_user_env (group_vars/all.yml). On a fresh
+# box the account does not exist yet and this is 0, which is what the bash
+# version's `id -u ... || echo 0` did too; the user role re-reads it as soon as
+# it has created the account.
+- name: Look up the app user
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ app_user }}"
+    fail_key: false
+  tags: always
+
+- name: Remember the app user's uid
+  ansible.builtin.set_fact:
+    app_uid: "{{ (getent_passwd[app_user] | default([]) or [])[1] | default(0) }}"
+  tags: always

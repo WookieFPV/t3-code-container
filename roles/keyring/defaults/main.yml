@@ -1,0 +1,10 @@
+---
+keyring_name: unnamed
+keyring_url: ""
+keyring_dest: ""
+keyring_fingerprints: []
+
+# Where a freshly downloaded key waits while it is being verified. In root's
+# home and mode 0600, so an unverified key is never readable by anything else
+# and never sits anywhere apt would look.
+keyring_candidate: "/root/.keyring-candidate-{{ keyring_name | replace(' ', '-') | lower }}"

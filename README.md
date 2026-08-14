@@ -15,8 +15,13 @@ container.
 ```bash
 git clone https://github.com/WookieFPV/t3-code-container /opt/provision
 cd /opt/provision
-sudo ./setup.sh --profile dev-node
+sudo ./provision.sh --profile dev-node
 ```
+
+That is the only command. `provision.sh` installs `ansible-core` from the
+distribution if it is missing, then runs the playbook against the machine it is
+sitting on — there is no control node, no inventory of IPs and no SSH into the
+box.
 
 ### On Proxmox, from nothing
 
@@ -36,7 +41,7 @@ LOG_FILE=/var/log/create-container.log ./pve/create-container.sh   # keep the wh
 It picks the next free CTID, the newest Debian template you have downloaded and
 the host's own DNS settings, sets the container options that are easy to get
 wrong (unprivileged, nesting, `ip=dhcp`, start-at-boot), then pushes this
-working tree in and runs `setup.sh` inside it.
+working tree in and runs `provision.sh` inside it.
 
 Run from a terminal it asks how much CPU, RAM and disk the container should
 get — Enter keeps the defaults (4 cores, 2048 MB, 20 GB), or set `CORES`,
@@ -46,7 +51,7 @@ to 512 MB (`SWAP_MB`).
 ## Profiles
 
 ```bash
-./setup.sh --list
+./provision.sh --list
 ```
 
 | Profile | What you get |
@@ -55,18 +60,30 @@ to 512 MB (`SWAP_MB`).
 | `dev-node` | The above plus Node, Bun, GitHub CLI (host keys pinned) and Claude Code |
 | `t3` | The above plus the t3 server, its systemd unit and a nightly update timer |
 
-A profile is a role list and a few settings — about ten lines. To build a
-different kind of box, copy one:
+A profile is a playbook: a role list and a few settings, about fifteen lines.
+To build a different kind of box, copy one:
 
-```bash
-# profiles/mine.sh
-PROFILE_DESCRIPTION="Python box"
-ROLES=(base user gh github-ssh)
-: "${APP_USER:=dev}"
+```yaml
+# playbooks/mine.yml
+# description: Python box
+- name: Python box
+  hosts: all
+  become: true
+  vars:
+    app_user: dev
+  pre_tasks:
+    - ansible.builtin.import_tasks: ../tasks/preflight.yml
+  roles:
+    - {role: base, tags: [base]}
+    - {role: user, tags: [user]}
+    - {role: gh, tags: [gh]}
+    - {role: github-ssh, tags: [github-ssh]}
+  post_tasks:
+    - ansible.builtin.import_tasks: ../tasks/done.yml
 ```
 
 ```bash
-sudo ./setup.sh --profile mine
+sudo ./provision.sh --profile mine
 ```
 
 See [docs/design.md](docs/design.md#writing-a-profile) for the details, and
@@ -76,37 +93,44 @@ below do not cover.
 ## Usage
 
 ```
-./setup.sh [options] [role...]
+./provision.sh [options] [role...] [-- ansible-playbook options]
 
   -p, --profile NAME   which profile to install       (default: $PROFILE or t3)
-  -r, --roles  a,b,c   install these roles instead of the profile's list;
-                       dependencies are resolved and added
-  -o, --only   a,b,c   run exactly these roles, without pulling in their
-                       dependencies — for repairing one step
-  -n, --dry-run        print the resolved plan and exit
+  -o, --only   a,b,c   run exactly these roles, without their dependencies —
+                       for repairing one step
+  -e, --extra  K=V     override any setting (repeatable)
+  -n, --dry-run        report what would change, without changing it
   -l, --list           list available profiles and roles
-  -L, --log    FILE    also append everything to FILE, ANSI-free and including
-                       the apt/npm output run_quiet hides from the terminal
+  -L, --log    FILE    also append everything to FILE, ANSI-free
   -h, --help           this
 ```
+
+Anything after `--` goes straight to `ansible-playbook`, so
+`./provision.sh -- --start-at-task 'Install t3'` and `--list-tags` work as you
+would expect.
 
 **Idempotent.** Re-run it any time; a converged run installs nothing and writes
 nothing. That is asserted by `test/install-check.sh`, which CI runs on every
 supported distribution.
 
-Any setting can be overridden from the environment:
+Any setting can be overridden with `-e`:
 
 ```bash
-TIMEZONE=Europe/Berlin sudo -E ./setup.sh
-APP_USER=alice NODE_MAJOR=22 sudo -E ./setup.sh --profile dev-node
-sudo ./setup.sh --only claude        # re-run one role
-sudo ./setup.sh --dry-run            # see the plan first
-sudo ./setup.sh --log /var/log/setup.log   # keep a full record of every run
+sudo ./provision.sh -e timezone=Europe/Berlin
+sudo ./provision.sh -p dev-node -e app_user=alice -e node_major=22
+sudo ./provision.sh --only claude        # re-run one role
+sudo ./provision.sh --dry-run            # see what would change first
+sudo ./provision.sh --log /var/log/provision.log
 ```
 
-Precedence, lowest first: defaults in `lib/common.sh` < profile < environment.
+Precedence, lowest first: `group_vars/all.yml` < the profile playbook < `-e`.
 
-### Upgrading a container provisioned by the old layout
+`--dry-run` is Ansible's `--check --diff`, so it reports honestly on packages,
+files and services. The vendor install scripts (bun, Claude Code) and
+`t3 service install` cannot be simulated and are reported as skipped rather than
+as the work they would do.
+
+### Upgrading a container provisioned by the bash version
 
 Pull and re-run. Everything on disk — the app user, `t3code.service`, the update
 timer, `~/.npmrc` — is where it was, and the roles converge onto it rather than
@@ -114,12 +138,23 @@ rebuilding it.
 
 ```bash
 cd /opt/t3-code-container && git pull
-sudo ./setup.sh --profile t3
+sudo ./provision.sh --profile t3
 ```
 
-The one interface change is module selection: `./setup.sh 40 50` is now
-`./setup.sh --only t3 t3-service`. Passing a number prints the mapping instead
-of failing.
+Two interface changes:
+
+- `./setup.sh` is `./provision.sh`, and settings move from the environment to
+  `-e`: `TIMEZONE=Europe/Berlin ./setup.sh` becomes
+  `./provision.sh -e timezone=Europe/Berlin`. Variable names are lower case now
+  (`APP_USER` → `app_user`, `NODE_MAJOR` → `node_major`).
+- `--roles a,b,c`, which resolved dependencies, is gone. Use a profile for a
+  fixed set and `--only` for repairs; see [Roles](#roles) for what each one
+  expects to already be there.
+
+One thing changes on disk: the NodeSource keyring moves from
+`/usr/share/keyrings/nodesource.gpg` to `nodesource.asc`, because the key is
+installed as the vendor serves it rather than dearmored on the way past. The old
+file is left behind and ignored; delete it if you like.
 
 ## Roles
 
@@ -136,8 +171,14 @@ of failing.
 | `t3-service` | `t3` | `t3code.service` plus a nightly update timer |
 | `first-login` | `user` | Installs the guided one-time account setup |
 
-Order is derived from the `requires` line in each role's header, not from
-filenames.
+Two supporting roles are not in any profile and are included by the others:
+`keyring` (fetch a vendor signing key, verify it against pinned fingerprints)
+and `preflight` (assert a role's preconditions with an actionable error).
+
+Order is the order the profile playbook lists them in. The `Requires` column is
+not enforced by Ansible role dependencies on purpose — those get pulled in by
+`--tags` and would make `--only claude` re-run half the profile. Each role
+asserts its own preconditions instead, and tells you which step to run.
 
 ## Distribution support
 
@@ -146,6 +187,10 @@ filenames.
 | 1 | Debian 12/13, Ubuntu 24.04 | CI installs and re-runs on every push |
 | 2 | Fedora, RHEL-like, Arch | Written to work, nothing tests it, warns at startup |
 | — | Alpine | Refused: no systemd, and every service here is a systemd user unit |
+
+Debian, Ubuntu and Fedora need only `ansible-core`, which `provision.sh`
+installs. Arch additionally needs `community.general` for its package module, so
+there `provision.sh` installs the bundled `ansible` package instead.
 
 ## First login
 
@@ -167,6 +212,10 @@ for t3, and gets the server to pick it up. Re-runnable — every step checks
 whether it is already done. Do **not** use plain `su`; see
 [Troubleshooting](docs/design.md#systemctl---user-says-failed-to-connect-to-bus).
 
+Each run is appended, ANSI-free, to `~/.local/state/first-login.log` — the
+steps, and every ok/warn/error along the way. Relocate it with
+`FIRST_LOGIN_LOG=/path` or disable with `FIRST_LOGIN_LOG=`.
+
 Then clone what you want to work on — the script has no way to know which:
 
 ```bash
@@ -187,8 +236,8 @@ journalctl --user -u t3-update.service         # what the last update did
 ## Tests
 
 ```bash
-./test/unit.sh                                  # library layer; no root, one second
-sudo ./test/install-check.sh --profile minimal  # install twice, assert convergence
+./test/unit.sh                                  # the shipped scripts; no root, one second
+sudo ./test/install-check.sh --profile minimal  # install twice, assert changed=0
 ```
 
 `install-check.sh` is destructive — run it in a throwaway container, which is
@@ -198,10 +247,12 @@ what [CI](.github/workflows/ci.yml) does.
 
 | Path | Purpose |
 | --- | --- |
-| `setup.sh` | Entrypoint: parse arguments, pick a profile, resolve and run the plan |
-| `lib/` | The shared layer — logging, distro detection, packages, files, keys, roles |
-| `profiles/` | Role lists and settings; the user-facing surface |
-| `roles/<name>/install.sh` | One installable thing, with its `files/` beside it |
+| `provision.sh` | Bootstrap: install `ansible-core`, pick a profile, run the playbook |
+| `playbooks/<name>.yml` | A profile: a role list and its settings; the user-facing surface |
+| `group_vars/all.yml` | Settings shared by every profile |
+| `roles/<name>/` | One installable thing — `tasks/`, and its `files/` beside it |
+| `tasks/` | The pre_tasks and post_tasks every profile shares |
+| `inventory/local.yml` | The only inventory: this machine, no network |
 | `pve/create-container.sh` | Creates and provisions an LXC container; runs on the Proxmox host |
 | `test/` | Unit tests and the idempotency check |
 | `docs/design.md` | Why it is built this way, and the failure modes |

@@ -1,0 +1,7 @@
+---
+t3_service_unit_dir: "{{ app_home }}/.config/systemd/user"
+t3_home: "{{ app_home }}/.t3"
+
+# The polkit daemon package. Debian and Ubuntu call it polkitd; everyone else
+# calls it polkit.
+t3_service_polkit_package: "{{ 'polkitd' if ansible_os_family == 'Debian' else 'polkit' }}"

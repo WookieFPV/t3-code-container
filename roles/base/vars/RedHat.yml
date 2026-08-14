@@ -1,0 +1,35 @@
+---
+# Package names for the RHEL family. Tier 2: written to work, nothing tests it.
+# Keep in step with vars/Debian.yml when adding anything.
+
+base_packages:
+  - bash-completion
+  - bind-utils
+  # No build-essential metapackage here; these are what it pulls in that
+  # node-gyp actually needs.
+  - gcc
+  - gcc-c++
+  - make
+  - ca-certificates
+  - cronie
+  - curl
+  - dbus
+  - git
+  - gnupg2
+  - htop
+  - jq
+  # systemd ships the PAM bits that are a separate package on Debian.
+  - systemd
+  # The locale, prebuilt. Derived from the configured locale rather than pinned
+  # to English, so `-e locale=de_DE.UTF-8` installs glibc-langpack-de.
+  - "glibc-langpack-{{ locale.split('_')[0] | lower }}"
+  - lsof
+  - nano
+  - openssh-clients
+  - python3
+  - systemd-container
+  - unzip
+  - vim
+  - wget
+
+base_locale_from_locale_gen: false

@@ -1,0 +1,35 @@
+---
+# description: Node + Bun + GitHub CLI + Claude Code, no background service
+#
+# A general JavaScript/TypeScript development container: Node, Bun, the GitHub
+# CLI with its host keys pinned, and Claude Code. No t3, no background service.
+#
+# The nearest thing to "a dev box I can ssh into and start working on".
+
+- name: JavaScript/TypeScript dev container
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    # Nothing here builds native modules by default. Add package names if
+    # something you install does:
+    #   ./provision.sh -p dev-node -e npm_allow_scripts=node-pty,esbuild
+    npm_allow_scripts: ""
+
+  pre_tasks:
+    - name: Preflight
+      ansible.builtin.import_tasks: ../tasks/preflight.yml
+
+  roles:
+    - {role: base,       tags: [base]}
+    - {role: user,       tags: [user]}
+    - {role: gh,         tags: [gh]}
+    - {role: github-ssh, tags: [github-ssh]}
+    - {role: node,       tags: [node]}
+    - {role: bun,        tags: [bun]}
+    - {role: claude,     tags: [claude]}
+
+  post_tasks:
+    - name: Done
+      ansible.builtin.import_tasks: ../tasks/done.yml

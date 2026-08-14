@@ -1,0 +1,5 @@
+---
+galaxy_info:
+  description: The t3 CLI, in the app user's own npm prefix
+  standalone: true
+dependencies: []

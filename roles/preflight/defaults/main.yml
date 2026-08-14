@@ -1,0 +1,4 @@
+---
+preflight_for: this role
+preflight_commands: []
+preflight_systemd: false

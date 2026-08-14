@@ -1,0 +1,69 @@
+---
+# Global installs land in the user's own tree instead of /usr, so `npm i -g`
+# never needs root.
+
+- name: Every component of the npm prefix belongs to the app user
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: "0755"
+  loop: "{{ npm_prefix_dirs }}"
+
+- name: The npm prefix, in the app user's .npmrc
+  ansible.builtin.lineinfile:
+    path: "{{ app_home }}/.npmrc"
+    regexp: '^prefix='
+    line: "prefix={{ npm_prefix }}"
+    create: true
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: "0644"
+
+# The allowlist has to live in .npmrc rather than on our own command lines,
+# because the installs that matter most are ones nobody types: a tool's own
+# service installer or self-updater running
+#   npm install --prefix <staging> --no-fund --no-audit <pkg>@<version>
+# and npm 12 rejects --allow-scripts outright for a project-scoped install like
+# that ("Add the entries to the allowScripts field in package.json, or to
+# .npmrc, instead").
+#
+# `regexp:` rather than a plain append, so changing the profile's list rewrites
+# the line instead of leaving two of them behind for npm's last-wins rule to
+# sort out. The t3 role reads this file back and would otherwise have to
+# reproduce that rule to check it.
+- name: The npm install-script allowlist
+  ansible.builtin.lineinfile:
+    path: "{{ app_home }}/.npmrc"
+    regexp: '^allow-scripts='
+    line: "allow-scripts={{ npm_allow_scripts }}"
+    create: true
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: "0644"
+  when: npm_allow_scripts | length > 0
+
+- name: Note that no install scripts are allowed
+  ansible.builtin.debug:
+    msg: "npm_allow_scripts is empty — no install scripts allowed"
+  when: npm_allow_scripts | length == 0
+
+# --------------------------------------------------------------- npm itself
+- name: Which npm does the app user have?
+  ansible.builtin.command: npm --version
+  become: true
+  become_user: "{{ app_user }}"
+  environment: "{{ app_user_env }}"
+  register: node_npm_version
+  changed_when: false
+  failed_when: false
+
+- name: Install the pinned npm major into the user prefix
+  ansible.builtin.command:
+    argv: [npm, install, -g, "npm@{{ npm_major }}", --no-fund, --no-audit]
+  become: true
+  become_user: "{{ app_user }}"
+  environment: "{{ app_user_env }}"
+  when: (node_npm_version.stdout | default('0') | trim or '0').split('.')[0] != npm_major | string
+  changed_when: true

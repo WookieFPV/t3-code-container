@@ -1,0 +1,72 @@
+---
+# Claude Code, plus optional seeded model/effort defaults.
+#
+# Not an npm package — it ships its own installer and self-updating versions
+# directory, so it is deliberately not part of any nightly npm update.
+
+- name: Preconditions
+  ansible.builtin.include_role:
+    name: preflight
+  vars:
+    preflight_for: claude
+    preflight_commands: [curl]
+
+# The installer writes the binary to ~/.local/bin and its versions directory to
+# ~/.local/share/claude, creating either on demand — so it needs to own ~/.local
+# itself, not just its children. This is the role whose EACCES taught us that.
+- name: Every component of the npm prefix belongs to the app user
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: "0755"
+  loop: "{{ npm_prefix_dirs }}"
+
+- name: Is Claude Code already installed?
+  ansible.builtin.stat:
+    path: "{{ app_home }}/.local/bin/claude"
+  register: claude_bin
+
+- name: Install Claude Code
+  ansible.builtin.shell:
+    cmd: set -o pipefail && curl -fsSL https://claude.ai/install.sh | bash
+    executable: /bin/bash
+    creates: "{{ app_home }}/.local/bin/claude"
+  become: true
+  become_user: "{{ app_user }}"
+  environment: "{{ app_user_env }}"
+  when: not claude_bin.stat.exists
+
+# Not reported as a change, for the same reason as `bun upgrade` — see the
+# comment there.
+- name: Keep Claude Code current
+  ansible.builtin.command: claude update
+  become: true
+  become_user: "{{ app_user }}"
+  environment: "{{ app_user_env }}"
+  when: claude_bin.stat.exists
+  register: claude_update
+  changed_when: false
+  failed_when: false
+
+- name: Warn when the update failed
+  ansible.builtin.debug:
+    msg: "WARNING: claude update failed; keeping the existing version."
+  when: claude_bin.stat.exists and claude_update.rc != 0
+
+- name: Which Claude Code is installed?
+  ansible.builtin.command: claude --version
+  become: true
+  become_user: "{{ app_user }}"
+  environment: "{{ app_user_env }}"
+  register: claude_version
+  changed_when: false
+  failed_when: false
+
+- name: Say so
+  ansible.builtin.debug:
+    msg: "claude {{ claude_version.stdout | default('(version unknown)') | trim }}"
+
+- name: Seeded defaults
+  ansible.builtin.import_tasks: settings.yml

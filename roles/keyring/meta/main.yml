@@ -1,0 +1,5 @@
+---
+galaxy_info:
+  description: Fetch a vendor signing key and verify it against pinned fingerprints
+  standalone: true
+dependencies: []

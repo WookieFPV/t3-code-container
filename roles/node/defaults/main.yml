@@ -1,0 +1,20 @@
+---
+node_major: 24
+
+# Distributions ship whatever npm Node bundles (11.x for Node 24). npm 12 blocks
+# install-time lifecycle scripts where 11 only warns, and the roles here are
+# written against the blocking behaviour, so pin the major rather than
+# inheriting it. Installed into the user prefix, never into /usr.
+npm_major: 12
+
+# Pinned signing key for https://deb.nodesource.com.
+# Cross-check against https://github.com/nodesource/distributions before
+# changing.
+#   6F71...E0B4  rsa2048, created 2016-05-23, "NodeSource <gpg@nodesource.com>"
+node_keyring_fingerprints:
+  - 6F71F525282841EEDAF851B42F59B5F99B1BE0B4
+
+# The key NodeSource serves is ASCII-armored, and apt reads armored keyrings in
+# Signed-By perfectly well — so it is installed verbatim under a name that says
+# what it is, rather than dearmored on the way past.
+node_keyring: /usr/share/keyrings/nodesource.asc

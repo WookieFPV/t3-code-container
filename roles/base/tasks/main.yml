@@ -1,0 +1,29 @@
+---
+# Base packages, timezone and locale.
+#
+# Runs before everything. base owns every system package, so no other role has
+# to install one as a side effect — with one deliberate exception, polkit in
+# t3-service, for a reason documented there.
+
+- name: Package names for this distribution
+  ansible.builtin.include_vars: "{{ role_path }}/vars/{{ ansible_os_family }}.yml"
+
+- name: Refresh the apt index
+  ansible.builtin.apt:
+    update_cache: true
+    # The bash version kept a marker under /run so that base, gh and node did
+    # not each pay for their own refresh across three separate processes. One
+    # playbook is one process, so apt's own cache age is enough.
+    cache_valid_time: 1800
+  when: ansible_os_family == 'Debian'
+
+- name: Install the base packages
+  ansible.builtin.package:
+    name: "{{ base_packages }}"
+    state: present
+
+- name: Timezone
+  ansible.builtin.import_tasks: timezone.yml
+
+- name: Locale
+  ansible.builtin.import_tasks: locale.yml

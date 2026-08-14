@@ -1,0 +1,28 @@
+---
+# Node.js and a user-owned npm prefix.
+
+- name: The runtime
+  ansible.builtin.include_tasks: "runtime-{{ ansible_os_family }}.yml"
+
+- name: Check what landed
+  ansible.builtin.include_role:
+    name: preflight
+  vars:
+    preflight_for: node
+    preflight_commands: [node, npm]
+
+- name: Which Node is installed?
+  ansible.builtin.command: node -v
+  register: node_installed
+  changed_when: false
+
+- name: Warn when the repositories could not offer the requested major
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: node {{ node_installed.stdout }} is older than the requested
+      major ({{ node_major }}). On a tier 2 distribution this is the newest the
+      repositories offer; install a newer build by hand if something needs it.
+  when: node_installed.stdout | regex_replace('^v', '') | int < node_major | int
+
+- name: The npm prefix
+  ansible.builtin.import_tasks: npm-prefix.yml

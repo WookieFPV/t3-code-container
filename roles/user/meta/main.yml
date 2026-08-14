@@ -1,0 +1,5 @@
+---
+galaxy_info:
+  description: Unprivileged app user, linger, home layout and shell environment
+  standalone: true
+dependencies: []

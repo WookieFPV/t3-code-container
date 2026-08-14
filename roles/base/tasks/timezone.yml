@@ -1,0 +1,56 @@
+---
+# Systemd timers fire in local time, so this is what "04:00" means for the
+# nightly t3 update. Container images are almost always UTC.
+#
+# Done by hand rather than with community.general.timezone, to keep the
+# bootstrap to ansible-core alone — see the comment in ansible.cfg.
+
+- name: Does this timezone exist?
+  ansible.builtin.stat:
+    path: "/usr/share/zoneinfo/{{ timezone }}"
+  register: base_tz_file
+
+- name: Warn about an unknown timezone
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: unknown timezone '{{ timezone }}' — leaving the system default
+      in place.
+  when: not base_tz_file.stat.exists
+
+- name: Configure the timezone
+  when: base_tz_file.stat.exists
+  block:
+    - name: What is the timezone now?
+      ansible.builtin.command: timedatectl show -p Timezone --value
+      register: base_tz_now
+      changed_when: false
+      # timedatectl exits non-zero without a running systemd, which is a
+      # perfectly normal state for the CI containers that run the base role.
+      failed_when: false
+
+    - name: Set the timezone with timedatectl
+      ansible.builtin.command: "timedatectl set-timezone {{ timezone }}"
+      when:
+        - base_tz_now.rc == 0
+        - base_tz_now.stdout != timezone
+      changed_when: true
+
+    # timedatectl refuses to work without a running systemd; the symlink and the
+    # file are what it would have written anyway.
+    - name: Set the timezone by hand where timedatectl cannot
+      when: base_tz_now.rc != 0
+      block:
+        - name: Point /etc/localtime at the zone
+          ansible.builtin.file:
+            src: "/usr/share/zoneinfo/{{ timezone }}"
+            dest: /etc/localtime
+            state: link
+            force: true
+
+        - name: Record it in /etc/timezone
+          ansible.builtin.copy:
+            content: "{{ timezone }}\n"
+            dest: /etc/timezone
+            owner: root
+            group: root
+            mode: "0644"

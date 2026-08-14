@@ -1,0 +1,16 @@
+---
+exclude_paths:
+  - .github/
+
+# The production profile demands things this repo deliberately does not do
+# (fully qualified collection names are used, but every task also has to be
+# idempotent by ansible-lint's static reading, which it cannot see through a
+# shipped script). `safety` is the level whose findings have all been real here.
+profile: safety
+
+# Nothing is skipped on purpose. Every command/shell task in these roles sets
+# changed_when explicitly — several to `false`, because running a vendor's own
+# updater is not a change this playbook converges on — so the rule that would
+# otherwise be the first candidate for a skip has nothing to say.
+warn_list:
+  - experimental

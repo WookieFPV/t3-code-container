@@ -4,9 +4,9 @@
 # RUN THIS ON THE PROXMOX HOST, not inside a container.
 #
 # This is the only Proxmox-aware file in the repo. Everything it installs comes
-# from setup.sh, which knows nothing about Proxmox and runs equally well on a
-# VM, a cloud VPS or an Incus container — so this script is optional, and
-# replacing it does not mean forking anything else.
+# from the Ansible playbooks, which know nothing about Proxmox and run equally
+# well on a VM, a cloud VPS or an Incus container — so this script is optional,
+# and replacing it does not mean forking anything else.
 #
 # It encodes the container settings that are easy to get wrong in the wizard:
 #   ip=dhcp        the wizard defaults to Static with an empty address, which
@@ -37,7 +37,7 @@ log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 
 # ------------------------------------------------------------------- --log
 # LOG_FILE=FILE keeps the whole run — stdout and stderr — appended to FILE as
-# plain text (the terminal keeps its colours). Same mechanism as setup.sh's
+# plain text (the terminal keeps its colours). Same mechanism as provision.sh's
 # --log, so a create-and-provision invocation leaves one record of everything,
 # including the provisioning output pct exec streams back to the host.
 LOG_FILE=${LOG_FILE:-}
@@ -105,8 +105,8 @@ if ! pvesm list "$tpl_store" 2>/dev/null | grep -q "$(basename "$tpl_file")"; th
     die "template not found: $TEMPLATE"
 fi
 
-[[ -f $REPO_DIR/profiles/$PROFILE.sh ]] || die "no such profile: $PROFILE
-    Available: $(cd "$REPO_DIR/profiles" && ls ./*.sh | sed 's/\.sh$//; s|^\./||' | tr '\n' ' ')"
+[[ -f $REPO_DIR/playbooks/$PROFILE.yml ]] || die "no such profile: $PROFILE
+    Available: $(cd "$REPO_DIR/playbooks" && ls ./*.yml | sed 's/\.yml$//; s|^\./||' | tr '\n' ' ')"
 
 # ---------------------------------------------------------------- resources
 # The values above are the defaults. From a terminal, ask before creating; an
@@ -210,7 +210,7 @@ Created but not provisioned. Inside the container:
 
     pct enter $CTID
     <get this repo there somehow>
-    TIMEZONE=$TIMEZONE ./setup.sh --profile $PROFILE
+    ./provision.sh --profile $PROFILE -e timezone=$TIMEZONE
 EOF
     exit 0
 fi
@@ -224,10 +224,18 @@ pct exec "$CTID" -- rm -f /tmp/provision.tar.gz
 rm -f /tmp/provision-"$CTID".tar.gz
 
 log "provisioning with profile '$PROFILE'"
-# PVE_CTID lets setup.sh's closing notes say `pct enter` — its shell commands
+# provision.sh installs ansible-core inside the container and runs the playbook
+# there, against localhost. Nothing is provisioned over SSH: the container has
+# an address by now, but it has no SSH server, no keys and no user yet — and
+# needing none of that is what keeps this script the only Proxmox-aware file in
+# the repo.
+#
+# pve_ctid lets the playbook's closing notes say `pct enter`: its shell commands
 # are meant for inside the container, but we are printing them on the host.
-pct exec "$CTID" -- env "TIMEZONE=$TIMEZONE" "PVE_CTID=$CTID" \
-    /opt/provision/setup.sh --profile "$PROFILE"
+pct exec "$CTID" -- /opt/provision/provision.sh \
+    --profile "$PROFILE" \
+    -e "timezone=$TIMEZONE" \
+    -e "pve_ctid=$CTID"
 
 cat <<EOF
 
@@ -239,5 +247,9 @@ Get a shell inside it:
 
 Re-provision at any time, from the host:
 
-    pct exec $CTID -- /opt/provision/setup.sh --profile $PROFILE
+    pct exec $CTID -- /opt/provision/provision.sh --profile $PROFILE
+
+Or repair a single role:
+
+    pct exec $CTID -- /opt/provision/provision.sh --only claude
 EOF

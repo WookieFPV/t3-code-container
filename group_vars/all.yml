@@ -1,0 +1,110 @@
+---
+# Settings shared by every profile. This is what lib/common.sh used to hold.
+#
+# Precedence, lowest to highest:
+#   this file  <  playbooks/<profile>.yml vars  <  -e on the command line
+#
+# So a profile overrides a default simply by setting the same key, and
+# `provision.sh -e claude_model=claude-sonnet-5` beats both. That is the same
+# order the bash version had; it just no longer needs the `: "${VAR:=...}"`
+# discipline to get it, because Ansible's variable precedence does it.
+
+# ---------------------------------------------------------------- the account
+# The unprivileged account that runs the installed tooling.
+#
+# Deliberately has no sudo: the playbook (as root) owns all system state, so an
+# agent running as this user cannot damage the OS install. Nothing in these
+# roles needs root anyway — user systemd units, outbound-only networking, ports
+# above 1024, and global npm installs into the user's own prefix.
+app_user: devuser
+app_home: "/home/{{ app_user }}"
+
+# User-owned npm prefix, so `npm i -g` never needs root.
+npm_prefix: "{{ app_home }}/.local"
+
+# Every component of that prefix, parents included — the list is what several
+# roles ensure before they install anything, and listing the parents is the
+# whole point of it. Two reasons, both of which cost a real afternoon once:
+#
+#   - Claude Code's installer creates ~/.local/share itself, so it needs to be
+#     able to write to ~/.local — which is root:root if only the leaves were
+#     ever created with an ownership.
+#   - `npm i -g --strict-allow-scripts` stats both $prefix/bin and $prefix/lib
+#     rather than creating them on demand, and dies with ENOENT if either is
+#     missing.
+#
+# Each role that installs into the prefix ensures these itself rather than
+# trusting that the user role has been re-run since — `--only t3` on an
+# already-provisioned box has to work on its own.
+npm_prefix_dirs:
+  - "{{ npm_prefix }}"
+  - "{{ npm_prefix }}/bin"
+  - "{{ npm_prefix }}/lib"
+  - "{{ npm_prefix }}/share"
+
+# Copy root's authorized_keys to the app user, so the key given at container
+# creation reaches the account you actually work in. false on a shared box.
+seed_authorized_keys: true
+
+# ------------------------------------------------------------------ the system
+# Systemd timers use local time, so this decides when nightly jobs fire.
+timezone: Etc/UTC
+locale: en_US.UTF-8
+
+# ---------------------------------------------------------------------- npm
+# npm 12 blocks dependency install-time lifecycle scripts outright (npm 11, the
+# one Node 24 bundles, only warns). Packages with native code need theirs to
+# build. This is a comma-separated allowlist written to the app user's .npmrc,
+# and it is shared config rather than a setting on the node role because the
+# roles that install such packages have to agree with it — see roles/t3.
+npm_allow_scripts: ""
+
+# ------------------------------------------------------- the app user's shell
+# What every task that runs as the app user gets for an environment.
+#
+# The bash version used `env -i` here, for a specific reason worth keeping: if
+# provisioning is launched from a shell inside an agent or an `npm exec`, the
+# environment carries npm_config_* along with it — npm_config_prefix=/usr,
+# npm_config_cache=/root/.npm, npm_config_userconfig. Those outrank the app
+# user's own .npmrc and send npm at root-owned paths, so `npm i -g` fails with
+# EACCES.
+#
+# Ansible cannot express "inherit nothing" (an `environment:` value of null is
+# rendered as the literal string "None", not an unset), so the defence is in two
+# places instead. provision.sh unsets the whole npm_config_* class before
+# ansible-playbook starts, and the three that actually decide where npm writes
+# are set explicitly here, where they outrank anything inherited.
+app_user_env:
+  HOME: "{{ app_home }}"
+  USER: "{{ app_user }}"
+  LOGNAME: "{{ app_user }}"
+  SHELL: /bin/bash
+  LANG: C.UTF-8
+  BUN_INSTALL: "{{ app_home }}/.bun"
+  PATH: "{{ npm_prefix }}/bin:{{ app_home }}/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+  # `systemctl --user` needs this, and there is no login session here to set it.
+  # app_uid is a fact the playbook's pre_tasks establish, and the user role
+  # re-reads after creating the account (see roles/user/tasks/main.yml).
+  XDG_RUNTIME_DIR: "/run/user/{{ app_uid }}"
+  npm_config_prefix: "{{ npm_prefix }}"
+  npm_config_cache: "{{ app_home }}/.npm"
+  npm_config_userconfig: "{{ app_home }}/.npmrc"
+
+# ------------------------------------------------------------------ apt
+# Package architecture in Debian's spelling, for the Architectures: field of a
+# deb822 source. ansible_architecture is the kernel's name (x86_64), which apt
+# does not accept.
+apt_arch: >-
+  {{ {'x86_64': 'amd64', 'aarch64': 'arm64', 'armv7l': 'armhf'}
+     .get(ansible_architecture, ansible_architecture) }}
+
+# ------------------------------------------------------------ support tiers
+# 1  Debian, Ubuntu        — what CI installs and re-runs on every push
+# 2  Fedora, RHEL-like, Arch — written to work, nothing tests it, warns
+# 0  Alpine                — refused with an explanation
+#
+# Claiming a distribution nothing tests is worse than not claiming it, so tier 2
+# prints a warning naming itself rather than pretending to be supported.
+os_tier: >-
+  {{ 1 if ansible_distribution in ['Debian', 'Ubuntu']
+     else (0 if ansible_os_family == 'Alpine' else 2) }}

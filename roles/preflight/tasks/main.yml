@@ -1,0 +1,60 @@
+---
+# What `require_cmd` and `os_require_systemd` used to be: a role states what it
+# needs, and gets an error naming the step to run rather than a failure from
+# somewhere inside a pipe.
+#
+# This exists because the profile playbooks deliberately do not use Ansible's
+# role dependencies — see the comment in playbooks/t3.yml. Dependencies would be
+# pulled in by --tags and make single-role repair runs re-run half the profile;
+# an assertion says the same thing without doing it behind your back.
+#
+# Usage, from a role's tasks/main.yml:
+#
+#   - name: Preconditions
+#     ansible.builtin.include_role:
+#       name: preflight
+#     vars:
+#       preflight_for: bun
+#       preflight_commands: [curl, unzip]
+#       preflight_systemd: true
+
+# `command -v`, not `which`: it is a POSIX shell builtin that exists everywhere,
+# where `which` is a package (and deprecated in Debian 13).
+- name: "{{ preflight_for }}: look for the commands this role needs"
+  ansible.builtin.command:
+    argv: [/bin/sh, -c, "command -v {{ item }} >/dev/null"]
+  loop: "{{ preflight_commands }}"
+  register: preflight_found
+  changed_when: false
+  failed_when: false
+  when: preflight_commands | length > 0
+
+- name: "{{ preflight_for }}: every required command must be present"
+  ansible.builtin.assert:
+    that: preflight_missing | length == 0
+    fail_msg: >-
+      {{ preflight_for }} needs {{ preflight_missing | join(', ') }}, which
+      {{ 'is' if preflight_missing | length == 1 else 'are' }} not installed.
+      Run './provision.sh --only base' first.
+    quiet: true
+  vars:
+    preflight_missing: >-
+      {{ preflight_found.results | default([])
+         | selectattr('rc', 'ne', 0) | map(attribute='item') | list }}
+  when: preflight_commands | length > 0
+
+- name: "{{ preflight_for }}: systemd must be running"
+  ansible.builtin.stat:
+    path: /run/systemd/system
+  register: preflight_systemd_dir
+  when: preflight_systemd | bool
+
+- name: "{{ preflight_for }}: fail without a systemd init"
+  ansible.builtin.assert:
+    that: preflight_systemd_dir.stat.exists | default(false)
+    fail_msg: >-
+      systemd is not running (no /run/systemd/system). In a container this
+      usually means it was started with a plain command instead of an init —
+      the LXC/Incus defaults are fine, 'docker run' is not.
+    quiet: true
+  when: preflight_systemd | bool

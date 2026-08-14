@@ -1,0 +1,5 @@
+---
+galaxy_info:
+  description: Pin GitHub's SSH host keys system-wide
+  standalone: true
+dependencies: []

@@ -1,0 +1,5 @@
+---
+galaxy_info:
+  description: Install the guided one-time account setup on the app user's PATH
+  standalone: true
+dependencies: []

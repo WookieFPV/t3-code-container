@@ -1,0 +1,47 @@
+---
+# Make t3's own linger call deterministic.
+#
+# `t3 service install` (and every nightly `t3 service update`) runs
+# `loginctl enable-linger` as the app user and aborts if that step exits
+# non-zero. logind does not take that call on faith: it asks polkit whether the
+# session user may set their own linger, and a box with no polkit daemon answers
+# "denied".
+#
+# Linger for the app user is already enabled by the user role (as root, before
+# this role runs), so the self-call has nothing left to do — the only question
+# is whether logind will authorize it. Relying on that proved fragile: on a real
+# container, even installing the polkit daemon did not always make the
+# authorization succeed.
+#
+# So: a user-scoped `loginctl` shim in the app user's PATH — $npm_prefix/bin,
+# which is first in the PATH these roles give that user — exits 0 for exactly
+# `loginctl enable-linger` with no further arguments (t3's invocation) and
+# forwards everything else to the real binary. The polkit daemon is installed
+# too, so the real command still works when something calls it by absolute path
+# or a human runs it by hand.
+#
+# Both are ensured *here* rather than in base, because a role that needs a
+# package must not depend on another role having been re-run since:
+# `./provision.sh --only t3-service` on an already-provisioned box has to work.
+
+- name: Every component of the npm prefix belongs to the app user
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: "0755"
+  loop: "{{ npm_prefix_dirs }}"
+
+- name: The loginctl shim, first on the app user's PATH
+  ansible.builtin.copy:
+    src: loginctl
+    dest: "{{ npm_prefix }}/bin/loginctl"
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: "0755"
+
+- name: The polkit daemon
+  ansible.builtin.package:
+    name: "{{ t3_service_polkit_package }}"
+    state: present
