@@ -22,6 +22,9 @@
 #   CORES=8 MEMORY_MB=8192 DISK_GB=50 ./pve/create-container.sh
 #   PROVISION=0 ./pve/create-container.sh            # create only
 #   DRY_RUN=1 ./pve/create-container.sh              # print, do not run
+#   LOG_FILE=/var/log/create-container.log ./pve/create-container.sh
+#                                                    # also append the whole
+#                                                    # run, ANSI-free, to a file
 #
 # Run from a terminal it asks how much CPU, RAM and disk the container should
 # get; Enter keeps the defaults (4 cores, 2048 MB, 20 GB).
@@ -31,6 +34,21 @@ REPO_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
 die() { printf '\033[31merror\033[0m %s\n' "$*" >&2; exit 1; }
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
+
+# ------------------------------------------------------------------- --log
+# LOG_FILE=FILE keeps the whole run — stdout and stderr — appended to FILE as
+# plain text (the terminal keeps its colours). Same mechanism as setup.sh's
+# --log, so a create-and-provision invocation leaves one record of everything,
+# including the provisioning output pct exec streams back to the host.
+LOG_FILE=${LOG_FILE:-}
+if [[ -n $LOG_FILE ]]; then
+    mkdir -p "$(dirname "$LOG_FILE")"
+    printf '\n==== %s ====\n' "$(date '+%F %T %Z')" >> "$LOG_FILE"
+    exec > >(tee >(sed -r 's/\x1b\[[0-9;]*m//g' >> "$LOG_FILE")) 2>&1
+    # tee is still draining the pipe when the script exits; close our end and
+    # wait, or the tail of the run would be lost.
+    trap 'exec 1>&- 2>&-; wait 2>/dev/null || true' EXIT
+fi
 
 command -v pct >/dev/null || die "pct not found — run this on the Proxmox host"
 

@@ -30,6 +30,7 @@ cd t3-code-container
 PROFILE=dev-node CT_HOSTNAME=devbox ./pve/create-container.sh
 CORES=8 MEMORY_MB=8192 DISK_GB=50 ./pve/create-container.sh   # size it explicitly
 DRY_RUN=1 ./pve/create-container.sh                # print what it would do
+LOG_FILE=/var/log/create-container.log ./pve/create-container.sh   # keep the whole run, ANSI-free
 ```
 
 It picks the next free CTID, the newest Debian template you have downloaded and
