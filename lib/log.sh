@@ -15,11 +15,19 @@ skip()   { printf '    \033[90mskip\033[0m %s\n' "$*"; }
 # (apt, npm, installers). Nothing is printed while it works; on failure the
 # captured log is replayed to stderr and the run dies with DESC. Callers print
 # their own ok/version line after a success.
+#
+# When setup.sh runs with --log FILE, the captured output is appended to that
+# file verbatim, so a quiet command is invisible on the terminal but still part
+# of the full record.
 run_quiet() {
     local desc=$1; shift
     local tmp
     tmp=$(mktemp) || die "mktemp failed"
     if "$@" >"$tmp" 2>&1; then
+        if [[ -n ${LOG_FILE:-} ]]; then
+            printf '    # %s\n' "$desc" >> "$LOG_FILE"
+            cat "$tmp" >> "$LOG_FILE"
+        fi
         rm -f "$tmp"
     else
         cat "$tmp" >&2

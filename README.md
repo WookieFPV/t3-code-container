@@ -84,6 +84,8 @@ below do not cover.
                        dependencies — for repairing one step
   -n, --dry-run        print the resolved plan and exit
   -l, --list           list available profiles and roles
+  -L, --log    FILE    also append everything to FILE, ANSI-free and including
+                       the apt/npm output run_quiet hides from the terminal
   -h, --help           this
 ```
 
@@ -98,6 +100,7 @@ TIMEZONE=Europe/Berlin sudo -E ./setup.sh
 APP_USER=alice NODE_MAJOR=22 sudo -E ./setup.sh --profile dev-node
 sudo ./setup.sh --only claude        # re-run one role
 sudo ./setup.sh --dry-run            # see the plan first
+sudo ./setup.sh --log /var/log/setup.log   # keep a full record of every run
 ```
 
 Precedence, lowest first: defaults in `lib/common.sh` < profile < environment.

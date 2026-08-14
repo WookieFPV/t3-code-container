@@ -24,6 +24,8 @@ Options:
                        already provisioned. Bare role arguments mean the same.
   -n, --dry-run        print the resolved plan and exit
   -l, --list           list available profiles and roles
+  -L, --log   FILE     also append everything to FILE — including the quiet
+                       apt/npm output that never reaches the terminal
   -h, --help           this
 
 Examples:
@@ -32,6 +34,7 @@ Examples:
   ./setup.sh --roles base,user,node      # an ad-hoc profile
   ./setup.sh --only claude               # re-run one role
   ./setup.sh node t3                     # same, positional
+  ./setup.sh --log /var/log/setup.log    # keep a full record of every run
   TIMEZONE=Europe/Berlin ./setup.sh      # any setting can be overridden
 
 Settings come from, lowest precedence first: lib/common.sh defaults, the
@@ -40,6 +43,7 @@ EOF
 }
 
 profile=${PROFILE:-t3}
+LOG_FILE=${LOG_FILE:-}
 roles_arg=()
 only_arg=()
 dry_run=0
@@ -56,6 +60,7 @@ while [[ $# -gt 0 ]]; do
         -o|--only)    mapfile -t -O "${#only_arg[@]}"  only_arg  < <(split_list "${2:?--only needs a list}");  shift 2 ;;
         -n|--dry-run) dry_run=1; shift ;;
         -l|--list)    do_list=1; shift ;;
+        -L|--log)     LOG_FILE=${2:?--log needs a file}; shift 2 ;;
         -h|--help)    usage; exit 0 ;;
         --)           shift; break ;;
         -*)           printf 'unknown option: %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
@@ -71,6 +76,21 @@ while [[ $# -gt 0 ]]; do
         *)            only_arg+=("$1"); shift ;;
     esac
 done
+
+# ---------------------------------------------------------------- --log FILE
+# Tee everything — stdout and stderr — into LOG_FILE as well as the terminal.
+# The terminal keeps its colours; the file gets the same lines stripped of
+# ANSI escapes. run_quiet (lib/log.sh) separately appends the output it hides
+# from the terminal, so the file really has everything.
+if [[ -n $LOG_FILE ]]; then
+    mkdir -p "$(dirname "$LOG_FILE")"
+    printf '\n==== %s ====\n' "$(date '+%F %T %Z')" >> "$LOG_FILE"
+    exec > >(tee >(sed -r 's/\x1b\[[0-9;]*m//g' >> "$LOG_FILE")) 2>&1
+    # tee is still draining the pipe when the script exits; close our end and
+    # wait, or the tail of the run would be lost.
+    trap 'exec 1>&- 2>&-; wait 2>/dev/null || true' EXIT
+    export LOG_FILE
+fi
 
 PROFILE_FILE="$PROFILES_DIR/$profile.sh"
 export PROFILE_FILE
