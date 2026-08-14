@@ -5,18 +5,33 @@
 #
 # `t3 service install` and the nightly `t3 service update` run
 # `loginctl enable-linger` for the app user and abort the install when the step
-# exits non-zero. Linger for the app user is already enabled by the user role
-# (as root, before this role runs), so this self-call has nothing left to do —
-# but whether it *succeeds* depends on logind's polkit authorization, which has
-# proved unreliable in containers even with the polkit daemon installed.
+# exits non-zero (dist/bin.mjs: runStep("enabling lingering for this user",
+# "loginctl", ["enable-linger"]) inside the install effect, before the unit is
+# written). Linger for the app user is already enabled by the `user` role — as
+# root, before this role runs — so that self-call has nothing left to do. The
+# only question is whether logind will *authorize* it, and that goes through
+# polkit's `org.freedesktop.login1.set-self-linger`, which needs a real login
+# session to interrogate. `runuser` does not create one, so the call fails on a
+# box where linger is already on and correct.
 #
-# So exit 0 for exactly `enable-linger` with no further arguments (that is the
-# exact invocation t3 makes), and pass everything else — including
-# `loginctl enable-linger <other user>`, which this unprivileged user may not
-# do anyway — through to the real binary untouched.
+# So: answer `enable-linger` from the state on disk rather than from logind.
+# /var/lib/systemd/linger/<user> is the file logind itself keys linger off, the
+# directory is world-readable, and reading it needs neither a session nor
+# polkit. If the marker is there the answer is genuinely yes and we exit 0.
+#
+# If it is *not* there, this shim must not invent an answer: reporting success
+# for linger that is not enabled buys a clean `t3 service install` and pays for
+# it with a t3code.service that systemd kills at logout. Fall through to the
+# real binary and let it succeed or fail on its own merits.
+#
+# Everything else — including `loginctl enable-linger <other user>`, which this
+# unprivileged user may not do anyway — is passed through untouched.
 set -euo pipefail
 
 REAL=/usr/bin/loginctl
+
+# Overridable so the unit tests can exercise both branches without root.
+LINGER_DIR=${LINGER_DIR:-/var/lib/systemd/linger}
 
 if [[ ! -x $REAL ]]; then
     printf 'loginctl: shim cannot find the real binary at %s\n' "$REAL" >&2
@@ -24,7 +39,13 @@ if [[ ! -x $REAL ]]; then
 fi
 
 if [[ ${1:-} == enable-linger && $# -eq 1 ]]; then
-    exit 0
+    if [[ -e $LINGER_DIR/$(id -un) ]]; then
+        exit 0
+    fi
+    printf 'loginctl: linger is not enabled for %s (%s is missing);\n' \
+        "$(id -un)" "$LINGER_DIR/$(id -un)" >&2
+    printf '  not faking success — asking the real loginctl instead.\n' >&2
+    printf "  Fix it as root with './setup.sh --only user'.\\n" >&2
 fi
 
 exec "$REAL" "$@"

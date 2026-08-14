@@ -319,18 +319,53 @@ with no polkit daemon answers "denied", the step fails with exit 1, and
 
 Linger for the app user is already enabled by the `user` role (as root, before
 this role runs), so that self-call has nothing left to do — the only question
-is whether logind will authorize it. Relying on that is fragile: on a real
-container, even installing the polkit daemon did not always make the
-authorization succeed. So the `t3-service` role makes the step deterministic by
-installing a user-scoped `loginctl` shim into the app user's PATH —
-`$NPM_PREFIX/bin/loginctl`, which is first in the PATH the roles give that user
-— that exits 0 for exactly `loginctl enable-linger` with no further arguments
-(t3's invocation) and forwards everything else to `/usr/bin/loginctl`. The role
+is whether logind will authorize it. Relying on that is fragile: the polkit
+action is `org.freedesktop.login1.set-self-linger`, which logind evaluates
+against the caller's *session*, and `runuser` does not create one. Installing
+the polkit daemon did not reliably fix it on a real container.
+
+So the `t3-service` role makes the step deterministic by installing a
+user-scoped `loginctl` shim into the app user's PATH —
+`$NPM_PREFIX/bin/loginctl`, which is first in the PATH the roles give that user.
+For exactly `loginctl enable-linger` with no further arguments (t3's
+invocation) it answers from `/var/lib/systemd/linger/<user>`: that file is what
+logind itself keys linger off, and reading it needs neither a session nor
+polkit. Marker present, exit 0. **Marker absent, forward to the real binary** —
+the shim reports what is true rather than what is convenient, because faking
+success there buys a clean `t3 service install` and pays for it with a
+`t3code.service` that systemd kills at logout. Everything else, including
+`loginctl enable-linger <other user>`, is forwarded untouched. The role
 also installs the polkit daemon (`polkitd` on Debian, `polkit` on RHEL/Arch)
 so the real command still works when something calls it by absolute path or a
 human runs it by hand. Both are ensured *here* rather than in `base`, because a
 role must not depend on another role having been re-run, so `./setup.sh --only
 t3-service` on an already-provisioned box has to work on its own.
+
+### What this repo does *not* hand-roll, and why the split is there
+
+It is worth being explicit, because "install the service from a provisioning
+role" reads like the kind of thing that should be left to the tool:
+
+- **The unit, the pinned runtime and the update protocol are t3's.** The role
+  shells out to `t3 service install` and inspects the result. It never writes
+  `t3code.service` itself. Everything in the list above is why.
+- **What the role adds is the environment `t3 service install` assumes.** The
+  `allow-scripts` line so the pinned runtime's `npm install --prefix` can build
+  `node-pty`; linger that resolves without a login session; a compiler and
+  python3 for node-gyp. Those are the provisioner's job by definition — t3
+  cannot install its own build toolchain.
+- **The rest of the role is verification, not installation.** `t3 service
+  install` exits 0 once the unit is written and the runtime is staged, and both
+  can be perfect over a server that dies on its first start. So the role checks
+  the two things the installer does not: that the pinned runtime can load
+  `node-pty`, and that the server behind the unit reported itself listening
+  (a live `pid` in `~/.t3/userdata/server-runtime.json`). Provisioning that
+  reports success for a crash-looping unit is worse than provisioning that
+  fails, because the next thing to run is an interactive OAuth flow.
+
+The one part with a real alternative is the nightly timer, which duplicates
+what the app's own update button does. It exists because that button is the
+*only* other trigger — see below.
 
 ### Nightly updates
 
@@ -432,6 +467,43 @@ server is running or has never started. `Environment link: provisioned` means
 ---
 
 ## Troubleshooting
+
+### `Environment link: pending server startup` right after `first-login`
+
+The server provisions the link asynchronously, and on a healthy box it lands
+20–30s after the restart. When it does not, the important thing to know is that
+**t3 says nothing until it has finished trying**. The reconcile is wrapped in
+
+```
+Effect.retry({ while: <not 400/401/409>,
+               schedule: exponential(1s) capped at 30s, upTo 10 minutes })
+```
+
+and only then logs `T3 Connect desired link reconciled on startup` or
+`Failed to reconcile T3 Connect desired link on startup`. Every transport
+failure and every other HTTP status — a relay **403 included**, which is
+wrapped as `EnvironmentHttpInternalServerError` — stays in that loop for the
+full ten minutes. Only the three refusal statuses short-circuit.
+
+So an empty log two minutes in means nothing at all, which is why `first-login`
+now waits out t3's own budget (`LINK_WAIT_SECONDS`, default 660) instead of
+guessing at two. It still returns the moment either line appears.
+
+If ten minutes really do pass with neither line written, the reconcile never
+ran: the loop returns without logging when the desired-link flag is unset, and
+`t3 connect link` is what sets it — at the *end*, after the browser step.
+
+```bash
+t3 connect status                    # 'Exposure: enabled' is that flag
+t3 connect link --headless           # if it says disabled, do it again
+systemctl --user restart t3code.service
+grep -i 'desired link' ~/.t3/userdata/logs/boot-service.log | tail
+```
+
+A logged failure with `(403 ` in it is the relay declining, not a transport
+problem — release the stale environment at https://app.t3.codes and restart.
+Nothing below the link layer has run at that point: no link means no managed
+tunnel and no relay client, so cloudflared is not the suspect.
 
 ### Two servers, one environment
 

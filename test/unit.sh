@@ -126,13 +126,28 @@ check "t3 profile allows msgpackr-extract" 1 "$([[ ,$t3_allow, == *,msgpackr-ext
 
 # ------------------------------------------------ t3-service linger shim
 # t3 aborts the install when `loginctl enable-linger` exits non-zero, so the
-# shim must no-op exactly that self-call and forward everything else to the
-# real binary. The forwarded exit codes are compared against the real loginctl
-# so the assertions hold whether or not the test runs as root.
+# shim answers exactly that self-call from the linger marker on disk — and only
+# when the marker is there. Both branches matter: confirming linger that is
+# enabled is the whole point, and confirming linger that is *not* enabled would
+# buy a clean install and pay for it with a service systemd kills at logout.
+# LINGER_DIR is overridable so both can be exercised without root. The
+# forwarded exit codes are compared against the real loginctl so the assertions
+# hold whichever user runs the tests.
 shim="$ROLES_DIR/t3-service/files/loginctl"
-check "loginctl shim exists"       1 "$([[ -f $shim ]] && echo 1)"
+check "loginctl shim exists"        1 "$([[ -f $shim ]] && echo 1)"
 check "loginctl shim is executable" 1 "$([[ -x $shim ]] && echo 1)"
-check "shim no-ops 'enable-linger' (self)" 0 "$("$shim" enable-linger >/dev/null 2>&1; echo $?)"
+
+linger_dir=$(mktemp -d)
+: >"$linger_dir/$(id -un)"
+check "shim confirms 'enable-linger' when the marker is there" 0 \
+    "$( LINGER_DIR=$linger_dir "$shim" enable-linger >/dev/null 2>&1; echo $? )"
+
+empty_dir=$(mktemp -d)
+check "shim forwards 'enable-linger' when the marker is missing" \
+    "$( /usr/bin/loginctl enable-linger >/dev/null 2>&1; echo $? )" \
+    "$( LINGER_DIR=$empty_dir "$shim" enable-linger >/dev/null 2>&1; echo $? )"
+rm -rf "$linger_dir" "$empty_dir"
+
 check "shim forwards other commands" \
     "$( /usr/bin/loginctl --version >/dev/null 2>&1; echo $? )" \
     "$( "$shim" --version >/dev/null 2>&1; echo $? )"
