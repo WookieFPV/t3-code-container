@@ -60,7 +60,7 @@ fetch_keyring() {
     tmp=$(mktemp)
     log "downloading $name signing key"
     if [[ ${ARMORED:-0} == 1 ]]; then
-        curl -fsSL "$url" | gpg --dearmor -o "$tmp"
+        curl -fsSL "$url" | gpg --yes --dearmor -o "$tmp"
     else
         curl -fsSL "$url" -o "$tmp"
     fi
