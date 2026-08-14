@@ -24,14 +24,14 @@
 # destination for what arrives (.asc armored, .gpg binary) and it is self
 # documenting.
 
-- name: "{{ keyring_name }}: preconditions"
+- name: "Preconditions for keyring {{ keyring_name }}"
   ansible.builtin.include_role:
     name: preflight
   vars:
     preflight_for: "keyring ({{ keyring_name }})"
     preflight_commands: [gpg]
 
-- name: "{{ keyring_name }}: the verification script"
+- name: "Install the verification script for {{ keyring_name }}"
   ansible.builtin.copy:
     src: verify-keyring.sh
     dest: /usr/local/lib/verify-keyring.sh
@@ -39,12 +39,12 @@
     group: root
     mode: "0755"
 
-- name: "{{ keyring_name }}: is the keyring already installed?"
+- name: "Look for an already-installed keyring for {{ keyring_name }}"
   ansible.builtin.stat:
     path: "{{ keyring_dest }}"
   register: keyring_installed
 
-- name: "{{ keyring_name }}: download the signing key for inspection"
+- name: "Download for inspection the signing key of {{ keyring_name }}"
   ansible.builtin.get_url:
     url: "{{ keyring_url }}"
     dest: "{{ keyring_candidate }}"
@@ -60,7 +60,7 @@
 # Each fingerprint has to be its own argv element — the script compares them
 # one at a time, and a single space-joined argument would only ever match a
 # vendor that ships exactly the pinned keys in exactly the pinned order.
-- name: "{{ keyring_name }}: verify the fingerprints before trusting anything"
+- name: "Verify the fingerprints before trusting anything from {{ keyring_name }}"
   ansible.builtin.command:
     argv: >-
       {{ ['/usr/local/lib/verify-keyring.sh',
@@ -68,7 +68,7 @@
           keyring_name] + keyring_fingerprints }}
   changed_when: false
 
-- name: "{{ keyring_name }}: install the verified keyring"
+- name: "Install the verified keyring for {{ keyring_name }}"
   ansible.builtin.copy:
     src: "{{ keyring_candidate }}"
     dest: "{{ keyring_dest }}"
@@ -78,7 +78,7 @@
     mode: "0644"
   when: not keyring_installed.stat.exists
 
-- name: "{{ keyring_name }}: drop the candidate"
+- name: "Drop the unverified candidate key of {{ keyring_name }}"
   ansible.builtin.file:
     path: "{{ keyring_candidate }}"
     state: absent

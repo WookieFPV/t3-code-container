@@ -62,7 +62,10 @@
   changed_when: false
   failed_when: false
 
-- name: The nightly timer's next run
+# noqa command-instead-of-module: this is a status query for the human reading
+# the output, and the systemd module reports unit state rather than when a timer
+# will next fire.
+- name: The nightly timer's next run  # noqa command-instead-of-module
   ansible.builtin.command: systemctl --user list-timers t3-update.timer --no-pager
   become: true
   become_user: "{{ app_user }}"
@@ -73,4 +76,6 @@
 
 - name: Say where things stand
   ansible.builtin.debug:
-    msg: "{{ (t3_service_status.stdout | default('')) ~ '\n' ~ (t3_service_timers.stdout | default('')) }}"
+    msg: |-
+      {{ t3_service_status.stdout | default('') }}
+      {{ t3_service_timers.stdout | default('') }}

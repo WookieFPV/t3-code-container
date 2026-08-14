@@ -40,5 +40,5 @@
 - name: The nightly update timer
   ansible.builtin.import_tasks: nightly-update.yml
 
-- name: t3's own service
+- name: The t3 service itself
   ansible.builtin.import_tasks: service-install.yml

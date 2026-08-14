@@ -45,6 +45,25 @@ jobs:
             ansible-playbook "$p" --syntax-check
           done
 
+      # Ansible only reads group_vars/ when it sits beside the inventory or
+      # beside the playbook. At the repo root it is ignored *silently*, and
+      # every setting in it is undefined — which --syntax-check and ansible-lint
+      # both pass happily. This caught exactly that, once.
+      - name: the shared settings actually resolve
+        run: |
+          ansible -i inventory/local.yml localhost \
+            -m debug -a "msg={{ app_user }}|{{ npm_prefix }}|{{ npm_major }}" | tee /tmp/vars
+          grep -q 'devuser|/home/devuser/.local|12' /tmp/vars
+
+      # --only is the reason the playbooks carry per-role tags instead of
+      # declaring role dependencies. If a dependency ever creeps into a
+      # meta/main.yml, --tags claude silently starts running base and user too.
+      - name: --only selects one role and nothing else
+        run: |
+          ansible-playbook playbooks/t3.yml --tags claude --list-tasks > /tmp/tags
+          grep -q 'claude : Install Claude Code' /tmp/tags
+          ! grep -qE '^ +(base|user|node) : ' /tmp/tags
+
       - name: ansible-lint
         run: ansible-lint
 

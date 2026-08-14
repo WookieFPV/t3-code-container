@@ -33,7 +33,11 @@
 # `default(app_uid)` for --check: the user module reports no uid for an account
 # it only pretended to create, and without the fallback a dry run against a
 # fresh box dies here rather than reporting what it would do.
-- name: Re-read the app user's uid
+#
+# Deliberately not `user_app_uid`: app_user_env in inventory/group_vars/all.yml is built
+# from this, and every role that runs as the app user reads it. A role-prefixed
+# name would make a play-wide value look role-local.
+- name: Re-read the app user's uid  # noqa var-naming[no-role-prefix]
   ansible.builtin.set_fact:
     app_uid: "{{ user_account.uid | default(app_uid) }}"
 

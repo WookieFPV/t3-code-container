@@ -20,11 +20,29 @@ rules:
     allow-non-breakable-inline-mappings: true
 
   # `- {role: base, tags: [base]}` is more readable as a role list than four
-  # lines per role, and the flow form is deliberate there.
+  # lines per role, and the flow form is deliberate there. `1` rather than `0`
+  # because that is what ansible-lint requires of a custom yamllint config, and
+  # it is an upper bound — the zero-space form above still passes.
   braces:
-    max-spaces-inside: 0
+    max-spaces-inside: 1
   brackets:
-    max-spaces-inside: 0
+    max-spaces-inside: 1
+
+  # Both required by ansible-lint, and both worth having: a bare 0755 in YAML is
+  # the decimal 755, which is why every `mode:` in this repo is a quoted string.
+  octal-values:
+    forbid-implicit-octal: true
+    forbid-explicit-octal: true
+
+  # Comments in this repo are often indented to the block they explain rather
+  # than to the following line. Required false by ansible-lint.
+  comments-indentation: false
+
+  # The role lists in playbooks/ are column-aligned, which means padding after
+  # the comma. A profile's role list is the thing people read most often in this
+  # repo and the alignment is what makes it scan as a table.
+  commas:
+    max-spaces-after: -1
 
   comments:
     require-starting-space: true

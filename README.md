@@ -123,7 +123,7 @@ sudo ./provision.sh --dry-run            # see what would change first
 sudo ./provision.sh --log /var/log/provision.log
 ```
 
-Precedence, lowest first: `group_vars/all.yml` < the profile playbook < `-e`.
+Precedence, lowest first: `inventory/group_vars/all.yml` < the profile playbook < `-e`.
 
 `--dry-run` is Ansible's `--check --diff`, so it reports honestly on packages,
 files and services. The vendor install scripts (bun, Claude Code) and
@@ -249,7 +249,7 @@ what [CI](.github/workflows/ci.yml) does.
 | --- | --- |
 | `provision.sh` | Bootstrap: install `ansible-core`, pick a profile, run the playbook |
 | `playbooks/<name>.yml` | A profile: a role list and its settings; the user-facing surface |
-| `group_vars/all.yml` | Settings shared by every profile |
+| `inventory/group_vars/all.yml` | Settings shared by every profile |
 | `roles/<name>/` | One installable thing — `tasks/`, and its `files/` beside it |
 | `tasks/` | The pre_tasks and post_tasks every profile shares |
 | `inventory/local.yml` | The only inventory: this machine, no network |

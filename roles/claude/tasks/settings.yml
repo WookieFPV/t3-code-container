@@ -14,10 +14,10 @@
   ansible.builtin.debug:
     msg: >-
       no claude_model / claude_effort_level set — using the account default
-  when: not (claude_model | length or claude_effort_level | length)
+  when: not (claude_model | length > 0 or claude_effort_level | length > 0)
 
 - name: Seed the defaults
-  when: claude_model | length or claude_effort_level | length
+  when: claude_model | length > 0 or claude_effort_level | length > 0
   block:
     - name: The app user's .claude
       ansible.builtin.file:
@@ -95,7 +95,9 @@
 
         - name: Write the seeded settings
           ansible.builtin.copy:
-            content: "{{ claude_settings_current | combine(claude_settings_missing) | to_nice_json }}\n"
+            content: >-
+              {{ (claude_settings_current | combine(claude_settings_missing)
+                  | to_nice_json) ~ '\n' }}
             dest: "{{ claude_settings_file }}"
             owner: "{{ app_user }}"
             group: "{{ app_user }}"

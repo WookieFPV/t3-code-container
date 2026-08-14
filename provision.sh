@@ -42,7 +42,7 @@ Examples:
   ./provision.sh -e timezone=Europe/Berlin    # any setting can be overridden
   ./provision.sh --dry-run
 
-Settings come from, lowest precedence first: group_vars/all.yml, the profile
+Settings come from, lowest precedence first: inventory/group_vars/all.yml, the profile
 playbook, then -e. `--list` shows what each profile is for.
 
 Note on --dry-run: it is Ansible's --check --diff, so it reports honestly on
@@ -166,7 +166,7 @@ args+=("${extra[@]}" "${passthrough[@]}")
 # and sends `npm i -g` at root-owned paths (EACCES). This matters whenever
 # provisioning is launched from inside an agent session or an `npm exec`, which
 # is exactly how it gets re-run on a box that is already working. Drop the whole
-# class here; group_vars/all.yml then sets the three that decide where npm
+# class here; inventory/group_vars/all.yml then sets the three that decide where npm
 # writes to the values this box actually wants.
 unset "${!npm_config_@}" 2>/dev/null || true
 

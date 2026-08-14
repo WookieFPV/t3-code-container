@@ -14,7 +14,7 @@
 
 - name: Is the one we want among them?
   ansible.builtin.set_fact:
-    locale_is_generated: >-
+    base_locale_is_generated: >-
       {{ (locale.split('.')[0] ~ '.utf8') | lower
          in (base_locales.stdout_lines | map('lower') | list) }}
 
@@ -37,7 +37,7 @@
     # locale-gen ran on every single pass and no run was ever idempotent.
     - name: Run locale-gen
       ansible.builtin.command: locale-gen
-      when: base_locale_gen_line.changed or not locale_is_generated
+      when: base_locale_gen_line.changed or not base_locale_is_generated
       changed_when: true
 
 - name: Warn when a RedHat langpack did not provide the locale
@@ -47,7 +47,7 @@
       glibc-langpack-{{ locale.split('_')[0] | lower }}.
   when:
     - not base_locale_from_locale_gen | bool
-    - not locale_is_generated
+    - not base_locale_is_generated
 
 # ------------------------------------------------------------- the default
 # Three possible homes, because which one is authoritative depends on the
@@ -83,7 +83,8 @@
         set -e
         if command -v update-locale >/dev/null 2>&1; then
             update-locale "LANG=$1"
-        elif command -v localectl >/dev/null 2>&1 && localectl set-locale "LANG=$1" 2>/dev/null; then
+        elif command -v localectl >/dev/null 2>&1 &&
+             localectl set-locale "LANG=$1" 2>/dev/null; then
             :
         else
             printf 'LANG=%s\n' "$1" >/etc/locale.conf

@@ -24,11 +24,17 @@
           the app's connection while 'is-active' still says active.
 
     - name: Stop and disable it
-      ansible.builtin.command: systemctl --user disable --now t3.service
+      ansible.builtin.systemd:
+        name: t3.service
+        scope: user
+        state: stopped
+        enabled: false
       become: true
       become_user: "{{ app_user }}"
       environment: "{{ app_user_env }}"
-      changed_when: true
+      # A unit file that is present but was never enabled, or a user manager
+      # that has not loaded it, both make this fail — and neither is a reason
+      # not to delete the file, which is the step that actually matters.
       failed_when: false
 
     - name: Delete the unit file

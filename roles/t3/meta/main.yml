@@ -1,5 +1,8 @@
 ---
 galaxy_info:
+  author: t3-code-container
   description: The t3 CLI, in the app user's own npm prefix
+  license: MIT
+  min_ansible_version: "2.14"
   standalone: true
 dependencies: []

@@ -59,6 +59,15 @@ locale: en_US.UTF-8
 # roles that install such packages have to agree with it — see roles/t3.
 npm_allow_scripts: ""
 
+# Distributions ship whatever npm Node bundles (11.x for Node 24). npm 12 blocks
+# install-time lifecycle scripts where 11 only warns, and these roles are written
+# against the blocking behaviour, so pin the major rather than inheriting it.
+# Installed into the user prefix, never into /usr.
+#
+# Shared rather than a node-role setting for the same reason npm_allow_scripts
+# is: the t3 role's behaviour depends on which npm is in play.
+npm_major: 12
+
 # ------------------------------------------------------- the app user's shell
 # What every task that runs as the app user gets for an environment.
 #
@@ -74,6 +83,21 @@ npm_allow_scripts: ""
 # places instead. provision.sh unsets the whole npm_config_* class before
 # ansible-playbook starts, and the three that actually decide where npm writes
 # are set explicitly here, where they outrank anything inherited.
+
+# The app user's own prefixes come first, so a globally installed npm binary and
+# bun win over anything the distribution ships under the same name. The loginctl
+# shim in {{ npm_prefix }}/bin depends on this ordering — see
+# roles/t3-service/tasks/linger.yml.
+app_path_entries:
+  - "{{ npm_prefix }}/bin"
+  - "{{ app_home }}/.bun/bin"
+  - /usr/local/sbin
+  - /usr/local/bin
+  - /usr/sbin
+  - /usr/bin
+  - /sbin
+  - /bin
+
 app_user_env:
   HOME: "{{ app_home }}"
   USER: "{{ app_user }}"
@@ -81,7 +105,10 @@ app_user_env:
   SHELL: /bin/bash
   LANG: C.UTF-8
   BUN_INSTALL: "{{ app_home }}/.bun"
-  PATH: "{{ npm_prefix }}/bin:{{ app_home }}/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+  # Joined from a list rather than written out: a folded scalar would turn the
+  # line breaks into spaces and quietly corrupt the PATH, and one entry per line
+  # is what makes the ordering reviewable anyway.
+  PATH: "{{ app_path_entries | join(':') }}"
   # `systemctl --user` needs this, and there is no login session here to set it.
   # app_uid is a fact the playbook's pre_tasks establish, and the user role
   # re-reads after creating the account (see roles/user/tasks/main.yml).

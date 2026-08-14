@@ -1,12 +1,6 @@
 ---
 node_major: 24
 
-# Distributions ship whatever npm Node bundles (11.x for Node 24). npm 12 blocks
-# install-time lifecycle scripts where 11 only warns, and the roles here are
-# written against the blocking behaviour, so pin the major rather than
-# inheriting it. Installed into the user prefix, never into /usr.
-npm_major: 12
-
 # Pinned signing key for https://deb.nodesource.com.
 # Cross-check against https://github.com/nodesource/distributions before
 # changing.

@@ -30,7 +30,8 @@ who has never touched Proxmox.
 provision.sh             install ansible-core, pick a profile, run the playbook
   ansible.cfg            ansible-core only, no collections
   inventory/local.yml    this machine, connection: local
-  group_vars/all.yml     settings shared by every profile
+  inventory/group_vars/  settings shared by every profile — must live beside the
+                         inventory, not at the repo root, or Ansible ignores it
   playbooks/<name>.yml   a role list plus settings — the user-facing surface
     tasks/preflight.yml  refuse Alpine, warn on tier 2, read the app user's uid
     roles/<name>/        one installable thing
@@ -143,7 +144,7 @@ The rules that matter:
 - **Run as the app user with `become_user` plus `environment: "{{ app_user_env }}"`,**
   never one without the other. That variable is what carries the PATH, the
   `XDG_RUNTIME_DIR` that makes `systemctl --user` work, and the `npm_config_*`
-  overrides described in `group_vars/all.yml`.
+  overrides described in `inventory/group_vars/all.yml`.
 
 Then add it to `test/unit.sh` if it ships a script with logic worth asserting.
 
@@ -198,7 +199,7 @@ different kind of box, copy one and change the role list.
 The `# description:` comment on the second line is what `--list` shows; nothing
 else parses the file.
 
-Settings go under `vars:`, which sits between `group_vars/all.yml` and `-e` in
+Settings go under `vars:`, which sits between `inventory/group_vars/all.yml` and `-e` in
 Ansible's precedence order. That is the same three-level order the bash version
 maintained by hand with `: "${VAR:=...}"`, and here it needs no discipline to
 get right.
@@ -265,7 +266,7 @@ that fingerprint by hand.
 
 ### Every component of the app user's npm prefix is owned explicitly
 
-`npm_prefix_dirs` in `group_vars/all.yml` lists `~/.local` itself, not just
+`npm_prefix_dirs` in `inventory/group_vars/all.yml` lists `~/.local` itself, not just
 `~/.local/bin`, `lib` and `share`. That looks redundant and is not.
 
 The bash version created these with `install -d -o devuser ~/.local/bin`, which
