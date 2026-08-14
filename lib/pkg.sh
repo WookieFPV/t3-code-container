@@ -169,7 +169,7 @@ pkg_upgrade_to_candidate() {
     # was before the repository existed — reporting the distribution's old
     # version as current and skipping the upgrade this function exists for.
     pkg_index_update
-    installed=$(pkg_version "$p"); installed=${installed:-none}
+    installed=$(pkg_version "$p") || installed=none
     candidate=$(pkg_candidate "$p")
 
     if [[ -n $candidate && $installed == "$candidate" ]]; then
