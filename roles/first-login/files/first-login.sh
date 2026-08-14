@@ -109,7 +109,36 @@ fi
 # `t3 connect status` is a state dump, not a check: it exits 0 whether or not
 # anything was ever authorized, so gate on what it prints. "Authorization:" is
 # `missing` before, and names the stored credential after.
-connect_status() { t3 connect status 2>/dev/null; }
+#
+# stderr is kept, not dropped: when the CLI fails outright (it does, for
+# instance, when it is run from inside a process the server itself spawned and
+# the launcher IPC channel is not inherited) every grep below silently finds
+# nothing, and the script would report "already authorized" and then a link
+# warning for a box whose real problem is that the command never ran.
+connect_status() { t3 connect status 2>&1; }
+
+# The environment link is provisioned asynchronously, well after the server is
+# listening: the HTTP server is up in about a second, then it reconciles the
+# desired link and starts the relay client, which has to reach Cloudflare and
+# register its tunnel connections. On a healthy box that lands ~20-30s after
+# the restart, so anything less than that is a timeout on the normal path, not
+# a diagnosis.
+LINK_WAIT_SECONDS=${LINK_WAIT_SECONDS:-120}
+wait_for_link() {
+    local deadline=$((SECONDS + LINK_WAIT_SECONDS)) status
+    while :; do
+        status=$(connect_status)
+        if grep -q 'Environment link: provisioned' <<<"$status"; then
+            [[ -t 1 ]] && printf '\n'
+            return 0
+        fi
+        ((SECONDS < deadline)) || break
+        [[ -t 1 ]] && printf '.'
+        sleep 2
+    done
+    [[ -t 1 ]] && printf '\n'
+    return 1
+}
 
 step "t3 authorization"
 if connect_status | grep -q 'Authorization: missing'; then
@@ -166,10 +195,8 @@ else
     log "restarting so the server picks up the authorization"
     systemctl --user restart t3code.service || die "t3code.service failed to start —
     tail -n 50 $HOME/.t3/userdata/logs/boot-service.log"
-    for _ in {1..20}; do
-        connect_status | grep -q 'Environment link: provisioned' && break
-        sleep 0.5
-    done
+    log "waiting for the environment link and its tunnel (up to ${LINK_WAIT_SECONDS}s)"
+    wait_for_link || true
 fi
 
 if systemctl --user is-active --quiet t3code.service; then
@@ -189,10 +216,16 @@ fi
 if connect_status | grep -q 'Environment link: provisioned'; then
     ok "environment link provisioned"
 else
-    warn "environment link still missing. The tunnel is what the app connects
-    through, so this is worth chasing:
+    warn "environment link still not provisioned after ${LINK_WAIT_SECONDS}s.
+    'pending server startup' means the server has not reconciled the link yet;
+    give it another minute and re-check before chasing anything, the server
+    keeps retrying on its own:
         t3 connect status
-        grep 'Relay client' $HOME/.t3/userdata/logs/boot-service.log | tail"
+    If it stays pending, the relay client is where it goes wrong — the tunnel
+    is what the app connects through, and it needs outbound 443/UDP to
+    Cloudflare:
+        grep -i 'relay client' $HOME/.t3/userdata/logs/boot-service.log | tail
+        systemctl --user restart t3code.service"
 fi
 
 # -------------------------------------------------------------- claude code
