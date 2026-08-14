@@ -315,14 +315,22 @@ The `t3` role refuses to run if `NPM_ALLOW_SCRIPTS` does not list what it needs.
 `loginctl enable-linger` **as the app user**. logind does not take that call on
 faith: it asks polkit whether the session user may set their own linger. A box
 with no polkit daemon answers "denied", the step fails with exit 1, and
-`t3 service install` aborts before the unit is written. That is why the
-`t3-service` role installs the polkit daemon itself — Debian names it
-`polkitd`, RHEL/Arch just `polkit` — rather than leaving it to `base`: a role
-must not depend on another role having been re-run, so `./setup.sh --only
-t3-service` on an already-provisioned box has to work on its own. Nothing
-needs a custom rule: the `set-self-linger` action is granted to any local user
-by default, and merely having the daemon around makes the authorization
-succeed.
+`t3 service install` aborts before the unit is written.
+
+Linger for the app user is already enabled by the `user` role (as root, before
+this role runs), so that self-call has nothing left to do — the only question
+is whether logind will authorize it. Relying on that is fragile: on a real
+container, even installing the polkit daemon did not always make the
+authorization succeed. So the `t3-service` role makes the step deterministic by
+installing a user-scoped `loginctl` shim into the app user's PATH —
+`$NPM_PREFIX/bin/loginctl`, which is first in the PATH the roles give that user
+— that exits 0 for exactly `loginctl enable-linger` with no further arguments
+(t3's invocation) and forwards everything else to `/usr/bin/loginctl`. The role
+also installs the polkit daemon (`polkitd` on Debian, `polkit` on RHEL/Arch)
+so the real command still works when something calls it by absolute path or a
+human runs it by hand. Both are ensured *here* rather than in `base`, because a
+role must not depend on another role having been re-run, so `./setup.sh --only
+t3-service` on an already-provisioned box has to work on its own.
 
 ### Nightly updates
 

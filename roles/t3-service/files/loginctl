@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# A user-scoped shim for `loginctl`, installed into the app user's PATH by the
+# t3-service role (NPM_PREFIX/bin is first in the PATH the roles give that
+# user, so t3's spawn of the bare command finds this before /usr/bin/loginctl).
+#
+# `t3 service install` and the nightly `t3 service update` run
+# `loginctl enable-linger` for the app user and abort the install when the step
+# exits non-zero. Linger for the app user is already enabled by the user role
+# (as root, before this role runs), so this self-call has nothing left to do —
+# but whether it *succeeds* depends on logind's polkit authorization, which has
+# proved unreliable in containers even with the polkit daemon installed.
+#
+# So exit 0 for exactly `enable-linger` with no further arguments (that is the
+# exact invocation t3 makes), and pass everything else — including
+# `loginctl enable-linger <other user>`, which this unprivileged user may not
+# do anyway — through to the real binary untouched.
+set -euo pipefail
+
+REAL=/usr/bin/loginctl
+
+if [[ ! -x $REAL ]]; then
+    printf 'loginctl: shim cannot find the real binary at %s\n' "$REAL" >&2
+    exit 127
+fi
+
+if [[ ${1:-} == enable-linger && $# -eq 1 ]]; then
+    exit 0
+fi
+
+exec "$REAL" "$@"

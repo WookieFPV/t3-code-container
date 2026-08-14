@@ -60,13 +60,23 @@ fi
 
 as_user systemctl --user enable --now t3-update.timer
 
-# polkit is the authorization backend logind consults when a user enables
-# their own linger, and `t3 service install` runs `loginctl enable-linger` as
-# the app user — not as root — so with no polkit daemon that step is denied
-# and the whole install dies with "Background setup failed while enabling
-# lingering". It is ensured *here* rather than in base, because a role that
-# needs a package must not depend on another role having been re-run since:
-# `./setup.sh --only t3-service` on an already-provisioned box has to work.
+# `t3 service install` (and the nightly `t3 service update`) runs
+# `loginctl enable-linger` as the app user and aborts if that step exits
+# non-zero. Linger is already enabled by the user role, so the command has
+# nothing left to do — but whether it *succeeds* hinges on logind's polkit
+# authorization, which proved environment-dependent even after installing the
+# polkit daemon. Make that specific self-call deterministic: a user-scoped
+# `loginctl` shim in the app user's PATH (first there, so t3's spawn of the
+# bare command finds it) exits 0 for exactly `enable-linger` with no further
+# arguments and forwards everything else to the real binary. The polkit daemon
+# is installed too, so the real command still works when something calls it by
+# absolute path or a human runs it by hand. Both are ensured *here* rather than
+# in base, because a role that needs a package must not depend on another role
+# having been re-run since: `./setup.sh --only t3-service` on an
+# already-provisioned box has to work.
+user_dir "$NPM_PREFIX/bin"
+install_file "$ROLE_DIR/files/loginctl" \
+    "$NPM_PREFIX/bin/loginctl" 0755 "$APP_USER:$APP_USER" || true
 pkg_install polkit
 
 # Installs (or repairs) t3code.service for the t3 version currently on PATH:
@@ -84,10 +94,11 @@ else
     Check the log it writes: $APP_HOME/.t3/userdata/logs/boot-service.log
     A pinned-runtime build needs network, a compiler and python3 (base role),
     and the allow-scripts line in $APP_HOME/.npmrc (node role).
-    It also enables user lingering with 'loginctl enable-linger', which this
-    role ensures is authorized by installing the polkit daemon — so
-    'error: Background setup failed while enabling lingering' means polkitd is
-    missing, failed to start, or the D-Bus activation is broken."
+    The app user's 'loginctl' shim should have swallowed the 'enabling
+    lingering' step — if the log says that step failed anyway, t3 did not
+    resolve 'loginctl' through the app user's PATH; run
+    '$NPM_PREFIX/bin/loginctl enable-linger' and
+    'systemctl --user status t3code.service' as the app user to see why."
 fi
 
 as_user systemctl --user list-timers t3-update.timer --no-pager

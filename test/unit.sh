@@ -124,6 +124,22 @@ t3_allow=$( . "$REPO_DIR/profiles/t3.sh"; echo "$NPM_ALLOW_SCRIPTS" )
 check "t3 profile allows node-pty"         1 "$([[ ,$t3_allow, == *,node-pty,*        ]] && echo 1)"
 check "t3 profile allows msgpackr-extract" 1 "$([[ ,$t3_allow, == *,msgpackr-extract,* ]] && echo 1)"
 
+# ------------------------------------------------ t3-service linger shim
+# t3 aborts the install when `loginctl enable-linger` exits non-zero, so the
+# shim must no-op exactly that self-call and forward everything else to the
+# real binary. The forwarded exit codes are compared against the real loginctl
+# so the assertions hold whether or not the test runs as root.
+shim="$ROLES_DIR/t3-service/files/loginctl"
+check "loginctl shim exists"       1 "$([[ -f $shim ]] && echo 1)"
+check "loginctl shim is executable" 1 "$([[ -x $shim ]] && echo 1)"
+check "shim no-ops 'enable-linger' (self)" 0 "$("$shim" enable-linger >/dev/null 2>&1; echo $?)"
+check "shim forwards other commands" \
+    "$( /usr/bin/loginctl --version >/dev/null 2>&1; echo $? )" \
+    "$( "$shim" --version >/dev/null 2>&1; echo $? )"
+check "shim does not swallow 'enable-linger <user>'" \
+    "$( /usr/bin/loginctl enable-linger definitely-not-a-user >/dev/null 2>&1; echo $? )" \
+    "$( "$shim" enable-linger definitely-not-a-user >/dev/null 2>&1; echo $? )"
+
 # ------------------------------------------------------------------ fs helpers
 tmp=$(mktemp -d)
 # Own the files as whoever is running the tests: install_file chowns, and these
