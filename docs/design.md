@@ -212,6 +212,12 @@ ones nobody types: a tool's own service installer or self-updater runs
 for a project-scoped install like that — *"Add the entries to the allowScripts
 field in package.json, or to .npmrc, instead"*.
 
+That single `.npmrc` source applies to the global installs this repo runs
+itself as well: the t3 role and the nightly updater deliberately do **not** pass
+`--allow-scripts` on their own `npm install -g` command lines. npm 12 reads the
+same `~/.npmrc` entries there, so a package allowed for the pinned runtime build
+is allowed everywhere, and a profile cannot drift into two different lists.
+
 Two consequences. `--strict-allow-scripts` stats **both** halves of the npm
 prefix rather than creating them on demand, so `~/.local/bin` *and*
 `~/.local/lib` must exist before the install or npm dies with `ENOENT` (the
@@ -447,7 +453,7 @@ cat ~/.t3/userdata/pre-update/version        # the version to reinstall
 
 systemctl --user stop t3code.service
 npm install -g "t3@$(cat ~/.t3/userdata/pre-update/version)" \
-    --allow-scripts=node-pty,msgpackr-extract --strict-allow-scripts
+    --strict-allow-scripts
 t3 service update                            # repoint the unit at that version
 systemctl --user stop t3code.service         # `service update` starts it again
 cp ~/.t3/userdata/pre-update/state.sqlite ~/.t3/userdata/state.sqlite

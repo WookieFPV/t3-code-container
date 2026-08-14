@@ -16,11 +16,13 @@ T3_NATIVE_DEPS="node-pty,msgpackr-extract"
 user_dir "$NPM_PREFIX/bin"
 user_dir "$NPM_PREFIX/lib"
 
-# The flag covers our own install; the .npmrc entry covers the ones we never
-# type (`t3 service install` and the in-app self-update both build a pinned
-# runtime with a project-scoped `npm install --prefix`, which npm 12 refuses to
-# accept the flag for). Check rather than assume, because a profile that
-# overrode NPM_ALLOW_SCRIPTS without these produces a silently broken server.
+# The allowlist is deliberately not passed as a --allow-scripts flag. It lives
+# in ~/.npmrc (node role), which npm 12 also consults for `npm install -g`, and
+# which is the only place the installs we never type (`t3 service install` and
+# the in-app self-update both build a pinned runtime with a project-scoped
+# `npm install --prefix`, which rejects the flag outright) will read it from.
+# Check rather than assume, because a profile that overrode NPM_ALLOW_SCRIPTS
+# without these produces a silently broken server.
 for dep in ${T3_NATIVE_DEPS//,/ }; do
     [[ ,$NPM_ALLOW_SCRIPTS, == *,$dep,* ]] ||
         die "NPM_ALLOW_SCRIPTS is '$NPM_ALLOW_SCRIPTS' and does not include '$dep'.
@@ -33,8 +35,6 @@ done
 # a t3 release that adds a new native dependency stops the run rather than half
 # installing.
 log "installing t3@$T3_VERSION"
-as_user npm install -g "t3@$T3_VERSION" \
-    --allow-scripts="$T3_NATIVE_DEPS" \
-    --strict-allow-scripts
+as_user npm install -g "t3@$T3_VERSION" --strict-allow-scripts
 
 ok "t3 $(as_user t3 --version 2>/dev/null || echo installed)"

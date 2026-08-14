@@ -28,14 +28,12 @@ current_version() {
 before=$(current_version)
 echo "t3 CLI version before update: $before"
 
-# The explicit flags are belt-and-braces: ~/.npmrc already allows these two, but
-# a global install accepts the flags and --strict-allow-scripts turns any *other*
-# blocked script into a hard error. That is the signal we want if a future t3
-# release adds a native dependency — it stops the update instead of quietly
-# shipping a half-built tree.
-if ! npm install -g t3@latest \
-        --allow-scripts=node-pty,msgpackr-extract \
-        --strict-allow-scripts; then
+# The allowlist is not repeated here: ~/.npmrc (node role) is the single source
+# of truth, and npm 12 reads it for global installs too. Strict mode stays,
+# because it turns any *other* blocked script into a hard error — the signal we
+# want if a future t3 release adds a native dependency. It stops the update
+# instead of quietly shipping a half-built tree.
+if ! npm install -g t3@latest --strict-allow-scripts; then
     echo "npm install failed; leaving $UNIT untouched" >&2
     exit 1
 fi
@@ -54,7 +52,7 @@ fi
 # itself while the server is still up on the old pinned runtime.
 if ! t3 --version >/dev/null 2>&1; then
     echo "t3 $after is installed but does not run; leaving $UNIT on the old runtime" >&2
-    echo "Recover with: npm install -g t3@$before --allow-scripts=node-pty,msgpackr-extract --strict-allow-scripts" >&2
+    echo "Recover with: npm install -g t3@$before --strict-allow-scripts" >&2
     exit 1
 fi
 
