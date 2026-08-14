@@ -96,6 +96,11 @@ The rules that matter:
   `install -d -o`. See [the ownership note](#every-directory-under-the-app-users-home-is-created-with-user_dir).
 - **Pin third-party signing keys** with `fetch_keyring`. Fail closed.
 - **Branch on `OS_FAMILY`, never on `OS_ID`.**
+- **Do not stream a command that is verbose on success.** Package managers and
+  installers are loud about things that are not errors; wrap them in
+  `run_quiet "what failed" <cmd> ...` (see `lib/log.sh`). Success prints
+  nothing, failure replays the captured log and dies, and the role prints its
+  own `log`/`ok` summary line either way.
 
 Then add it to a profile, and to `test/unit.sh` if it has logic worth asserting.
 
@@ -305,6 +310,16 @@ alone, `node-pty` never runs `node-gyp rebuild` and the pinned runtime is a t3
 with no working PTY. Its validation is `node <entry> --version`, which does not
 load node-pty and so passes, and you find out when a terminal fails at runtime.
 The `t3` role refuses to run if `NPM_ALLOW_SCRIPTS` does not list what it needs.
+
+`t3 service install` (and every nightly `t3 service update`) also runs
+`loginctl enable-linger` **as the app user**. logind does not take that call on
+faith: it asks polkit whether the session user may set their own linger. A box
+with no polkit daemon answers "denied", the step fails with exit 1, and
+`t3 service install` aborts before the unit is written. That is why the `base`
+role installs `polkitd` — Debian names the daemon `polkitd`, RHEL/Arch just
+`polkit` — even though this repo never talks to polkit itself. Nothing needs a
+custom rule: the `set-self-linger` action is granted to any local user by
+default, and merely having the daemon around makes the authorization succeed.
 
 ### Nightly updates
 

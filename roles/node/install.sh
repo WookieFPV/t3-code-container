@@ -90,6 +90,6 @@ if [[ ${have_npm%%.*} == "$NPM_MAJOR" ]]; then
     ok "npm $have_npm (major $NPM_MAJOR as pinned)"
 else
     log "npm $have_npm -> npm@$NPM_MAJOR"
-    as_user npm install -g "npm@$NPM_MAJOR"
+    run_quiet "npm install" as_user npm install -g "npm@$NPM_MAJOR" --no-fund --no-audit
     ok "npm $(as_user npm --version)"
 fi

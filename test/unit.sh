@@ -53,6 +53,8 @@ check "arch toolchain"              "base-devel"       "$(map_as arch build-esse
 check "rhel dnsutils"               "bind-utils"       "$(map_as rhel bind9-dnsutils)"
 check "arch python"                 "python"           "$(map_as arch python3)"
 check "arch gh"                     "github-cli"       "$(map_as arch gh)"
+check "debian polkit daemon"        "polkitd"          "$(map_as debian polkit)"
+check "rhel polkit daemon"          "polkit"           "$(map_as rhel polkit)"
 check "apt-only package dropped"    ""                 "$(map_as rhel apt-transport-https)"
 check "arch has no locale package"  ""                 "$(map_as arch locales)"
 check "unknown name passes through" "ripgrep"          "$(map_as rhel ripgrep)"

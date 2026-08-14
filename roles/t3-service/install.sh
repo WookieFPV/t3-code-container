@@ -74,7 +74,11 @@ else
     die "'t3 service install' failed.
     Check the log it writes: $APP_HOME/.t3/userdata/logs/boot-service.log
     A pinned-runtime build needs network, a compiler and python3 (base role),
-    and the allow-scripts line in $APP_HOME/.npmrc (node role)."
+    and the allow-scripts line in $APP_HOME/.npmrc (node role).
+    It also enables user lingering with 'loginctl enable-linger', which needs
+    the polkit daemon (installed by the base role) to authorize that call —
+    'error: Background setup failed while enabling lingering' means polkit is
+    missing or not running."
 fi
 
 as_user systemctl --user list-timers t3-update.timer --no-pager

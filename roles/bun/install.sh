@@ -16,7 +16,8 @@ if [[ -x $APP_HOME/.bun/bin/bun ]]; then
     as_user bun upgrade || warn "bun upgrade failed; keeping the existing version"
 else
     log "installing bun for $APP_USER"
-    as_user bash -c 'curl -fsSL https://bun.sh/install | bash'
+    run_quiet "bun install" as_user bash -c 'curl -fsSL https://bun.sh/install | bash'
+    ok "bun $(as_user bun --version 2>/dev/null || echo installed)"
 fi
 
 # The installer writes these to .bashrc itself, but only when it can see one it

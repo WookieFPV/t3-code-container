@@ -35,6 +35,8 @@ done
 # a t3 release that adds a new native dependency stops the run rather than half
 # installing.
 log "installing t3@$T3_VERSION"
-as_user npm install -g "t3@$T3_VERSION" --strict-allow-scripts
+run_quiet "npm install t3" as_user npm install -g "t3@$T3_VERSION" \
+    --strict-allow-scripts \
+    --no-fund --no-audit
 
 ok "t3 $(as_user t3 --version 2>/dev/null || echo installed)"

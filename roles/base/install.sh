@@ -15,6 +15,11 @@ os_detect
 # them, so the user role's linger wait would time out. They are packages, so
 # they belong here.
 #
+# polkit is what logind asks when a user enables their own linger — and
+# `t3 service install` does exactly that as the app user. Without it the call
+# is denied and the background service never gets installed; see
+# roles/t3-service/install.sh.
+#
 # build-essential and python3 are required at install time, not optional:
 # node-pty (a t3 dependency) ships prebuilds for macOS and Windows only, so on
 # Linux npm falls back to `node-gyp rebuild`, and node-gyp refuses to run
@@ -38,6 +43,7 @@ pkg_install \
     lsof \
     nano \
     openssh-client \
+    polkit \
     python3 \
     systemd-container \
     unzip \

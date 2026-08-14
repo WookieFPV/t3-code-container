@@ -13,7 +13,12 @@ pkg_map() {
     os_detect
 
     case $OS_FAMILY in
-        debian) printf '%s' "$n"; return ;;
+        debian)
+            # logind consults polkit when a user enables their own linger, and
+            # the base role installs it so `t3 service install` can — but the
+            # daemon package is called polkitd, not polkit, on Debian/Ubuntu.
+            if [[ $n == polkit ]]; then printf 'polkitd'; else printf '%s' "$n"; fi
+            return ;;
     esac
 
     case $OS_FAMILY:$n in
@@ -45,6 +50,10 @@ pkg_map() {
         arch:systemd-container)   printf 'systemd' ;;
 
         arch:gh)                  printf 'github-cli' ;;
+        # Fedora/RHEL and Arch name the polkit daemon package polkit (the
+        # Debian `polkitd` arm above handles the same canonical name).
+        rhel:polkit)              printf 'polkit' ;;
+        arch:polkit)              printf 'polkit' ;;
 
         # apt-only concepts.
         *:apt-transport-https)    printf '' ;;
@@ -108,6 +117,23 @@ pkg_installed() {
     esac
 }
 
+# pkg_transaction PKG... — run this family's install command for the given
+# *native* package names. Both pkg_install (packages are missing) and
+# pkg_upgrade_to_candidate (a newer version is available) funnel through here,
+# so the quiet/force flags live in one place. Output is left alone for
+# run_quiet to capture; only the exit status matters.
+pkg_transaction() {
+    os_detect
+    local rc=0
+    case $PKG_MGR in
+        apt)    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$@" || rc=$? ;;
+        dnf)    dnf -q install -y "$@" || rc=$? ;;
+        pacman) pacman -S --needed --noconfirm "$@" || rc=$? ;;
+        apk)    apk add -q --upgrade "$@" || rc=$? ;;
+    esac
+    return "$rc"
+}
+
 # pkg_install CANONICAL... — install whatever is missing, quietly if nothing is.
 pkg_install() {
     os_detect
@@ -129,12 +155,10 @@ pkg_install() {
 
     pkg_index_update
     log "installing: ${missing[*]}"
-    case $PKG_MGR in
-        apt)    DEBIAN_FRONTEND=noninteractive apt-get install -y "${missing[@]}" ;;
-        dnf)    dnf install -y "${missing[@]}" ;;
-        pacman) pacman -S --needed --noconfirm "${missing[@]}" ;;
-        apk)    apk add "${missing[@]}" ;;
-    esac
+    # Package managers are loud about things that are not errors (progress,
+    # per-file unpacking); capture it and only replay it when it goes wrong.
+    run_quiet "package install" pkg_transaction "${missing[@]}"
+    ok "installed ${missing[*]}"
 }
 
 # pkg_version PKG — installed version of a native package name, or empty.
@@ -178,12 +202,8 @@ pkg_upgrade_to_candidate() {
     fi
 
     log "$p $installed -> ${candidate:-latest}"
-    case $PKG_MGR in
-        apt)    DEBIAN_FRONTEND=noninteractive apt-get install -y "$p" ;;
-        dnf)    dnf install -y "$p" ;;
-        pacman) pacman -S --needed --noconfirm "$p" ;;
-        apk)    apk add --upgrade "$p" ;;
-    esac
+    run_quiet "install of $p" pkg_transaction "$p"
+    ok "$p now $(pkg_version "$p")"
 }
 
 # repo_add_deb822 NAME URI SUITES COMPONENTS KEYRING — add an apt source in

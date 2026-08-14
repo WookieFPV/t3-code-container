@@ -33,7 +33,8 @@ if [[ -x $APP_HOME/.local/bin/claude ]]; then
     as_user claude update || warn "claude update failed; keeping the existing version"
 else
     log "installing Claude Code for $APP_USER"
-    as_user bash -c 'curl -fsSL https://claude.ai/install.sh | bash'
+    run_quiet "claude install" as_user bash -c 'curl -fsSL https://claude.ai/install.sh | bash'
+    ok "claude $(as_user claude --version 2>/dev/null || echo installed)"
 fi
 
 # --------------------------------------------------------------- defaults
