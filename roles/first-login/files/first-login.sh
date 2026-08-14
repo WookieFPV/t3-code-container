@@ -121,9 +121,26 @@ connect_status() { t3 connect status 2>&1; }
 # listening: the HTTP server is up in about a second, then it reconciles the
 # desired link and starts the relay client, which has to reach Cloudflare and
 # register its tunnel connections. On a healthy box that lands ~20-30s after
-# the restart, so anything less than that is a timeout on the normal path, not
-# a diagnosis.
-LINK_WAIT_SECONDS=${LINK_WAIT_SECONDS:-120}
+# the restart.
+#
+# The timeout is not set from that happy path, though, because the server does
+# not report anything until it is finished trying. t3 wraps the reconcile in
+#
+#     Effect.retry({ while: <not 400/401/409>,
+#                    schedule: exponential(1s) capped at 30s, upTo 10 minutes })
+#
+# and only then logs "reconciled" or "Failed to reconcile". Every transport
+# failure and every other HTTP status — a relay 403 included — is wrapped as
+# EnvironmentHttpInternalServerError, which is not in that stop list, so it is
+# retried for the full ten minutes. Waiting two minutes and reporting "no
+# outcome logged" therefore said nothing about the box: it was the guaranteed
+# result of asking before t3 was done. Wait out t3's own budget instead, plus a
+# little slack for the last attempt to finish.
+#
+# Only the three refusal statuses short-circuit, and wait_for_link returns as
+# soon as one of them is logged, so a definite failure is still reported at
+# once rather than after ten minutes.
+LINK_WAIT_SECONDS=${LINK_WAIT_SECONDS:-660}
 
 # ...but only if the server is actually up. `systemctl restart` returning 0 says
 # the unit was started, not that the server behind it survived: the unit runs a
@@ -288,7 +305,9 @@ else
     tail -n 50 $SERVICE_LOG"
     log "waiting for the server to come up (up to ${SERVER_WAIT_SECONDS}s)"
     wait_for_server "$marker"
-    log "waiting for the environment link and its tunnel (up to ${LINK_WAIT_SECONDS}s)"
+    log "waiting for the environment link and its tunnel"
+    log "(usually ~30s; up to ${LINK_WAIT_SECONDS}s, because t3 retries a failed"
+    log "relay call for ten minutes before it reports either way)"
     wait_for_link || true
 fi
 
@@ -349,15 +368,25 @@ elif grep -q 'T3 Connect desired link reconciled' <<<"$boot_log"; then
         grep -i 'relay client' $SERVICE_LOG | tail
         systemctl --user restart t3code.service"
 else
-    # No outcome either way. Genuinely inconclusive, so say so instead of
-    # naming a culprit: a relay call that fails is retried with backoff for
-    # several minutes before anything is written.
-    warn "the server has not reconciled the environment link yet — it logged
-    neither success nor failure since it started listening, so ${LINK_WAIT_SECONDS}s is
-    not long enough to call this broken. Watch for the outcome rather than
-    re-running anything:
-        tail -f $SERVICE_LOG | grep -i 'desired link'
-        t3 connect status"
+    # Silence *after* t3's own retry budget has run out is a different thing
+    # from silence during it, and this branch is now only reached once the
+    # budget is gone. t3 writes one line or the other at the end of the
+    # reconcile no matter how it ends, so nothing written means the reconcile
+    # never ran — the loop is gated on the desired-link secret and returns
+    # without logging when it is unset. `t3 connect link` is what sets it, and
+    # it only sets it after the browser step completes.
+    warn "the server never attempted the environment link. It logged neither
+    success nor failure in the ${LINK_WAIT_SECONDS}s since it started listening, and t3's
+    own retry budget is ten minutes — so this is not something still in
+    flight. The reconcile is skipped without logging when the desired-link
+    flag is unset, which is the state a cancelled or half-finished
+    't3 connect link' leaves behind:
+        t3 connect status        # 'Exposure: enabled' is that flag
+    If it says disabled, re-run the authorization and let it finish:
+        t3 connect link --headless
+        systemctl --user restart t3code.service
+    If it says enabled, the server did not pick it up — read its log:
+        grep -i 'desired link' $SERVICE_LOG | tail"
 fi
 
 # -------------------------------------------------------------- claude code

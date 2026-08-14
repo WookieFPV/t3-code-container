@@ -67,8 +67,10 @@ as_user systemctl --user enable --now t3-update.timer
 # authorization, which proved environment-dependent even after installing the
 # polkit daemon. Make that specific self-call deterministic: a user-scoped
 # `loginctl` shim in the app user's PATH (first there, so t3's spawn of the
-# bare command finds it) exits 0 for exactly `enable-linger` with no further
-# arguments and forwards everything else to the real binary. The polkit daemon
+# bare command finds it) answers `enable-linger` from
+# /var/lib/systemd/linger/<user> — the file logind itself keys linger off, and
+# readable without a session or polkit — and forwards everything else, that
+# marker being absent included, to the real binary. The polkit daemon
 # is installed too, so the real command still works when something calls it by
 # absolute path or a human runs it by hand. Both are ensured *here* rather than
 # in base, because a role that needs a package must not depend on another role
@@ -94,11 +96,12 @@ else
     Check the log it writes: $APP_HOME/.t3/userdata/logs/boot-service.log
     A pinned-runtime build needs network, a compiler and python3 (base role),
     and the allow-scripts line in $APP_HOME/.npmrc (node role).
-    The app user's 'loginctl' shim should have swallowed the 'enabling
-    lingering' step — if the log says that step failed anyway, t3 did not
-    resolve 'loginctl' through the app user's PATH; run
-    '$NPM_PREFIX/bin/loginctl enable-linger' and
-    'systemctl --user status t3code.service' as the app user to see why."
+    If the log names the 'enabling lingering' step, the app user's 'loginctl'
+    shim either was not on t3's PATH or found no linger marker to confirm.
+    Check both as the app user:
+        ls -l /var/lib/systemd/linger/$APP_USER   # the user role creates this
+        command -v loginctl                       # $NPM_PREFIX/bin/loginctl
+    A missing marker is repaired with './setup.sh --only user' as root."
 fi
 
 # `t3 service install` exits 0 as soon as the unit is written and the runtime is
@@ -131,5 +134,56 @@ else
         npm rebuild node-pty --prefix $APP_HOME/.t3/runtime/versions/$active
     and restart with 'systemctl --user restart t3code.service'."
 fi
+
+# node-pty is the failure that motivated the check above, but it is not the only
+# one that leaves `t3 service install` exiting 0 over a server that never came
+# up. The unit runs a launcher and the launcher runs the pinned runtime as a
+# child, so anything that kills the child — a failed migration, a port already
+# bound, an unreadable database — shows as five restarts inside
+# StartLimitIntervalSec=300 and then a unit sitting in failed. Provisioning must
+# not report success for that: first-login is the next thing to run, and it
+# would otherwise be what discovers it, after an OAuth flow and several minutes.
+#
+# server-runtime.json is written by the server once it is listening and its
+# `pid` is the process that wrote it, so "exists, with a live pid" is the one
+# local fact that separates a running server from a started unit. Deliberately
+# not a freshness check: `t3 service install` reports changed:false and leaves
+# the unit alone when it is already current, and on that path the file
+# legitimately predates this run.
+: "${SERVER_WAIT_SECONDS:=45}"
+RUNTIME_JSON=$APP_HOME/.t3/userdata/server-runtime.json
+SERVICE_LOG=$APP_HOME/.t3/userdata/logs/boot-service.log
+
+log "waiting for the server to report itself listening (up to ${SERVER_WAIT_SECONDS}s)"
+deadline=$((SECONDS + SERVER_WAIT_SECONDS))
+while :; do
+    if ! as_user systemctl --user is-active --quiet t3code.service; then
+        die "t3code.service is not running after 't3 service install'.
+    The install wrote the unit and staged the runtime; the server behind it is
+    what did not come up:
+        tail -n 50 $SERVICE_LOG
+        systemctl --user status t3code.service      # as $APP_USER"
+    fi
+    # One node process for both facts, so the pid cannot go away between
+    # reading the file and signalling it. Signal 0 only checks existence.
+    if as_user node -e "
+        const s = require('fs').readFileSync('$RUNTIME_JSON', 'utf8');
+        process.kill(JSON.parse(s).pid, 0);
+    " 2>/dev/null; then
+        ok "server listening on $(as_user node -p \
+            "JSON.parse(require('fs').readFileSync('$RUNTIME_JSON','utf8')).origin" \
+            2>/dev/null || echo '?')"
+        break
+    fi
+    if ((SECONDS >= deadline)); then
+        die "t3code.service is active but the server never reported itself
+    listening (no live pid in $RUNTIME_JSON after ${SERVER_WAIT_SECONDS}s).
+    The unit starts a launcher, which starts the pinned runtime — that is the
+    part that did not come up:
+        tail -n 50 $SERVICE_LOG
+        systemctl --user status t3code.service      # as $APP_USER"
+    fi
+    sleep 1
+done
 
 as_user systemctl --user list-timers t3-update.timer --no-pager
