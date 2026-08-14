@@ -101,4 +101,35 @@ else
     'systemctl --user status t3code.service' as the app user to see why."
 fi
 
+# `t3 service install` exits 0 as soon as the unit is written and the runtime is
+# staged. A runtime whose node-pty install script was blocked stages perfectly
+# and only fails when the server starts: NodePtyModuleLoadError, systemd
+# restarts it five times, then 'start request repeated too quickly' and the unit
+# sits in failed. Out here that looks like a clean provision — right up until
+# 't3 connect status' says "Environment link: pending server startup" forever.
+#
+# node-pty ships prebuilds for darwin and win32 only, so on Linux the native
+# module exists exactly when the build ran. Load it the way the server does,
+# from the runtime the launcher will actually execute.
+state=$APP_HOME/.t3/runtime/service-state.json
+active=$(as_user node -p \
+    "JSON.parse(require('fs').readFileSync('$state','utf8')).activeVersion ?? ''" \
+    2>/dev/null) || active=""
+
+if [[ -z $active ]]; then
+    warn "could not read activeVersion from $state — skipping the node-pty check"
+elif as_user node -e \
+    "require('$APP_HOME/.t3/runtime/versions/$active/node_modules/node-pty')" \
+    2>/dev/null; then
+    ok "pinned runtime $active loads node-pty"
+else
+    die "the pinned runtime $active cannot load node-pty, so t3code.service will
+    crash-loop at startup however healthy 'service install' looked.
+    Almost always a blocked npm install script: check that
+    $APP_HOME/.npmrc carries 'allow-scripts=node-pty,msgpackr-extract'
+    (the node role writes it), then rebuild the module in place:
+        npm rebuild node-pty --prefix $APP_HOME/.t3/runtime/versions/$active
+    and restart with 'systemctl --user restart t3code.service'."
+fi
+
 as_user systemctl --user list-timers t3-update.timer --no-pager

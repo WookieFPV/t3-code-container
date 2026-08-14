@@ -31,6 +31,28 @@ for dep in ${T3_NATIVE_DEPS//,/ }; do
     your profile and re-run './setup.sh --only node t3'."
 done
 
+# The loop above checks the variable; what the pinned-runtime build actually
+# reads is the line in ~/.npmrc. Those two diverge on any box whose .npmrc was
+# written by a run that had NPM_ALLOW_SCRIPTS empty — the file keeps the
+# `prefix=` line it got then, the node role's ensure_line is the only thing that
+# would add the rest, and a --only run that skips node never revisits it. The
+# global `npm i -g` below still succeeds (it passes the flag on the command
+# line), so every check here reads healthy and the breakage surfaces much later
+# as a server that crash-loops on a node-pty it never compiled.
+#
+# Last assignment wins in an npmrc, so read the same value npm would.
+npmrc_allow=$(sed -n 's/^allow-scripts=//p' "$APP_HOME/.npmrc" 2>/dev/null | tail -n 1)
+for dep in ${T3_NATIVE_DEPS//,/ }; do
+    [[ ,$npmrc_allow, == *,$dep,* ]] ||
+        die "$APP_HOME/.npmrc allows scripts for '$npmrc_allow', which does not
+    include '$dep'.
+    The flag this role passes covers only the global install. 't3 service
+    install' builds its pinned runtime with a project-scoped 'npm install
+    --prefix', which reads the allowlist from .npmrc and nowhere else — without
+    it node-pty never runs node-gyp and t3code.service crash-loops at startup.
+    Re-run './setup.sh --only node t3' to have the node role write the line."
+done
+
 # --strict-allow-scripts turns any *other* blocked script into a hard error, so
 # a t3 release that adds a new native dependency stops the run rather than half
 # installing.
