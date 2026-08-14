@@ -28,6 +28,7 @@ git clone https://github.com/WookieFPV/t3-code-container
 cd t3-code-container
 ./pve/create-container.sh                          # next free CTID, Debian, t3 profile
 PROFILE=dev-node CT_HOSTNAME=devbox ./pve/create-container.sh
+CORES=8 MEMORY_MB=8192 DISK_GB=50 ./pve/create-container.sh   # size it explicitly
 DRY_RUN=1 ./pve/create-container.sh                # print what it would do
 ```
 
@@ -35,6 +36,11 @@ It picks the next free CTID, the newest Debian template you have downloaded and
 the host's own DNS settings, sets the container options that are easy to get
 wrong (unprivileged, nesting, `ip=dhcp`, start-at-boot), then pushes this
 working tree in and runs `setup.sh` inside it.
+
+Run from a terminal it asks how much CPU, RAM and disk the container should
+get — Enter keeps the defaults (4 cores, 2048 MB, 20 GB), or set `CORES`,
+`MEMORY_MB` and `DISK_GB` in the environment to skip the prompts. Swap defaults
+to 512 MB (`SWAP_MB`).
 
 ## Profiles
 

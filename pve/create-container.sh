@@ -19,8 +19,12 @@
 #   ./pve/create-container.sh                        # create and provision
 #   CTID=105 CT_HOSTNAME=foo ./pve/create-container.sh
 #   PROFILE=dev-node ./pve/create-container.sh
+#   CORES=8 MEMORY_MB=8192 DISK_GB=50 ./pve/create-container.sh
 #   PROVISION=0 ./pve/create-container.sh            # create only
 #   DRY_RUN=1 ./pve/create-container.sh              # print, do not run
+#
+# Run from a terminal it asks how much CPU, RAM and disk the container should
+# get; Enter keeps the defaults (4 cores, 2048 MB, 20 GB).
 set -euo pipefail
 
 REPO_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -85,6 +89,49 @@ fi
 
 [[ -f $REPO_DIR/profiles/$PROFILE.sh ]] || die "no such profile: $PROFILE
     Available: $(cd "$REPO_DIR/profiles" && ls ./*.sh | sed 's/\.sh$//; s|^\./||' | tr '\n' ' ')"
+
+# ---------------------------------------------------------------- resources
+# The values above are the defaults. From a terminal, ask before creating; an
+# empty answer keeps the default. Whatever ended up in the variables — from the
+# environment or from the prompts — is validated, so a typo fails before
+# anything is created. DRY_RUN and non-interactive runs never prompt.
+validate_int() {   # validate_int NAME VALUE
+    local name=$1 value=$2
+    if [[ ! $value =~ ^[0-9]+$ ]] || (( 10#$value == 0 )); then
+        die "$name must be a positive integer, got '$value'"
+    fi
+}
+prompt_int() {     # prompt_int NAME LABEL DEFAULT
+    local name=$1 label=$2 default=$3 answer
+    while :; do
+        printf '  %s [%s]: ' "$label" "$default"
+        if ! IFS= read -r answer; then
+            printf -v "$name" '%s' "$default"
+            return
+        fi
+        if [[ -z $answer ]]; then
+            printf -v "$name" '%s' "$default"
+            return
+        fi
+        if [[ $answer =~ ^[0-9]+$ ]] && (( 10#$answer > 0 )); then
+            printf -v "$name" '%s' "$answer"
+            return
+        fi
+        printf '  %s must be a positive integer — Enter keeps %s\n' "$label" "$default"
+    done
+}
+
+validate_int CORES     "$CORES"
+validate_int MEMORY_MB "$MEMORY_MB"
+validate_int SWAP_MB   "$SWAP_MB"
+validate_int DISK_GB   "$DISK_GB"
+
+if [[ $DRY_RUN != 1 && -t 0 ]]; then
+    printf 'Size for CT %s — Enter keeps each default:\n' "$CTID"
+    prompt_int CORES     "CPU cores" "$CORES"
+    prompt_int MEMORY_MB "RAM (MB)"  "$MEMORY_MB"
+    prompt_int DISK_GB   "Disk (GB)" "$DISK_GB"
+fi
 
 args=(
     "$CTID" "$TEMPLATE"
