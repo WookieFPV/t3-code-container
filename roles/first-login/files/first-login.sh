@@ -124,6 +124,88 @@ connect_status() { t3 connect status 2>&1; }
 # the restart, so anything less than that is a timeout on the normal path, not
 # a diagnosis.
 LINK_WAIT_SECONDS=${LINK_WAIT_SECONDS:-120}
+
+# ...but only if the server is actually up. `systemctl restart` returning 0 says
+# the unit was started, not that the server behind it survived: the unit runs a
+# launcher which starts the pinned runtime, and that can exit, crash-loop or
+# come up against a runtime that was never built, all while 'is-active' reads
+# fine for a while. Without this check the two failures are indistinguishable
+# from the outside — both look like dots on the screen — and waiting two minutes
+# for a link is nonsense if nothing is listening.
+#
+# server-runtime.json is written by the server itself once it is listening, so
+# "newer than the marker taken just before the restart, with a live pid in it"
+# is the one local fact that distinguishes a running server from a dead unit.
+SERVER_WAIT_SECONDS=${SERVER_WAIT_SECONDS:-45}
+RUNTIME_JSON=$HOME/.t3/userdata/server-runtime.json
+SERVICE_LOG=$HOME/.t3/userdata/logs/boot-service.log
+
+# What the app connects through is the environment link and the managed tunnel
+# behind it, in that order: the server provisions the link with a call to the
+# relay, and only then launches the relay client for it. So a box with no
+# tunnel is almost always a box with no link, and the two want opposite fixes.
+# The server writes both outcomes to its own log, so read that rather than
+# infer a cause from the absence of a link.
+#
+# systemd appends to this file across restarts, so scope every read to the
+# current boot — a previous boot's success must not answer for this one. The
+# server logs "Listening on ..." as it starts, which is the boundary.
+LOG_SCAN_LINES=${LOG_SCAN_LINES:-5000}
+
+current_boot_log() {
+    [[ -s $SERVICE_LOG ]] || return 1
+    tail -n "$LOG_SCAN_LINES" "$SERVICE_LOG" |
+        awk '/Listening on http/ { buf = "" } { buf = buf $0 "\n" } END { printf "%s", buf }'
+}
+
+# The reconcile failure line together with its indented cause block. t3 puts
+# the HTTP status in there, and that is the one fact separating "could not
+# reach the relay" from "the relay said no" — which are not the same bug.
+reconcile_failure() {
+    awk '
+        /Failed to reconcile T3 Connect desired link/ { block = $0 "\n"; grab = 1; next }
+        grab && /^[[:space:]]/                       { block = block $0 "\n"; next }
+        grab                                         { grab = 0 }
+        END { printf "%s", block }
+    ' <<<"$1"
+}
+
+server_running() {
+    local marker=$1 pid
+    systemctl --user is-active --quiet t3code.service || return 1
+    [[ -s $RUNTIME_JSON && $RUNTIME_JSON -nt $marker ]] || return 1
+    pid=$(jq -r '.pid // empty' "$RUNTIME_JSON" 2>/dev/null)
+    [[ -n $pid ]] && kill -0 "$pid" 2>/dev/null
+}
+
+# Fails loudly rather than returning, because everything after it is waiting on
+# a server that is not there.
+wait_for_server() {
+    local marker=$1 deadline=$((SECONDS + SERVER_WAIT_SECONDS))
+    while ! server_running "$marker"; do
+        if ! systemctl --user is-active --quiet t3code.service; then
+            [[ -t 1 ]] && printf '\n'
+            die "t3code.service is not running after the restart:
+    systemctl --user status t3code.service
+    tail -n 50 $SERVICE_LOG"
+        fi
+        if ((SECONDS >= deadline)); then
+            [[ -t 1 ]] && printf '\n'
+            die "the unit is active but the server never reported itself
+    listening (no fresh $RUNTIME_JSON after ${SERVER_WAIT_SECONDS}s). The unit
+    starts a launcher, which starts the pinned runtime — that is the part that
+    did not come up:
+    tail -n 50 $SERVICE_LOG
+    systemctl --user status t3code.service
+    Rebuild the pinned runtime with './setup.sh --only t3-service' as root."
+        fi
+        [[ -t 1 ]] && printf '.'
+        sleep 1
+    done
+    [[ -t 1 ]] && printf '\n'
+    log "server listening on $(jq -r .origin "$RUNTIME_JSON" 2>/dev/null)"
+}
+
 wait_for_link() {
     local deadline=$((SECONDS + LINK_WAIT_SECONDS)) status
     while :; do
@@ -131,6 +213,14 @@ wait_for_link() {
         if grep -q 'Environment link: provisioned' <<<"$status"; then
             [[ -t 1 ]] && printf '\n'
             return 0
+        fi
+        # A logged reconcile failure is final for this boot: t3 retries the
+        # relay call with backoff and only writes that line once it has given
+        # up, and it does not start over on its own. Stop waiting out a link
+        # that is not coming — the diagnosis below has the cause either way.
+        if [[ -n $(reconcile_failure "$(current_boot_log || true)") ]]; then
+            [[ -t 1 ]] && printf '\n'
+            return 1
         fi
         ((SECONDS < deadline)) || break
         [[ -t 1 ]] && printf '.'
@@ -193,8 +283,11 @@ if connect_status | grep -q 'Environment link: provisioned'; then
     tail -n 50 $HOME/.t3/userdata/logs/boot-service.log"
 else
     log "restarting so the server picks up the authorization"
+    marker=$(mktemp) && trap 'rm -f "$marker"' EXIT
     systemctl --user restart t3code.service || die "t3code.service failed to start —
-    tail -n 50 $HOME/.t3/userdata/logs/boot-service.log"
+    tail -n 50 $SERVICE_LOG"
+    log "waiting for the server to come up (up to ${SERVER_WAIT_SECONDS}s)"
+    wait_for_server "$marker"
     log "waiting for the environment link and its tunnel (up to ${LINK_WAIT_SECONDS}s)"
     wait_for_link || true
 fi
@@ -213,19 +306,58 @@ else
     file, not the journal)"
 fi
 
+# Three different failures end with 'Environment link: pending server startup',
+# and the status output cannot tell them apart — it reports the link as absent
+# whether the relay refused it, the tunnel never came up, or the server has not
+# asked yet. Split them on what the server logged this boot, because the fix
+# for one is wrong for the other two.
+boot_log=$(current_boot_log || true)
+failure=$(reconcile_failure "$boot_log")
+
 if connect_status | grep -q 'Environment link: provisioned'; then
     ok "environment link provisioned"
-else
-    warn "environment link still not provisioned after ${LINK_WAIT_SECONDS}s.
-    'pending server startup' means the server has not reconciled the link yet;
-    give it another minute and re-check before chasing anything, the server
-    keeps retrying on its own:
-        t3 connect status
-    If it stays pending, the relay client is where it goes wrong — the tunnel
-    is what the app connects through, and it needs outbound 443/UDP to
-    Cloudflare:
-        grep -i 'relay client' $HOME/.t3/userdata/logs/boot-service.log | tail
+elif [[ -n $failure ]]; then
+    # The relay answered and declined. Nothing below the link layer has run at
+    # this point: no link means no managed tunnel, so no relay client either,
+    # and pointing at cloudflared or a firewall here sends people down a hole.
+    hint=""
+    if grep -qE '\(403 ' <<<"$failure"; then
+        # A 403 is a refusal, not a transport error, and t3 tags it
+        # 'EnvironmentHttpInternalServerError' and retries it for minutes
+        # before logging — so neither the tag nor the delay means "transient".
+        hint="
+
+    403 is the relay declining to create the link rather than failing to serve
+    the request, so restarting alone will not change the answer. Check the
+    environments at https://app.t3.codes: an account that already holds its
+    allowed environment link refuses the next one, and releasing the stale
+    entry there is the fix. Then:
         systemctl --user restart t3code.service"
+    fi
+    warn "the server reached the relay and the relay refused to provision the
+    environment link. This is not a tunnel, firewall or relay-client problem —
+    the relay client is only started once the link exists, which is why it is
+    not running. What the server logged:
+
+$(sed 's/^/        /' <<<"$failure")$hint"
+elif grep -q 'T3 Connect desired link reconciled' <<<"$boot_log"; then
+    # The link exists; only the tunnel behind it is missing. This is the one
+    # case where the relay client really is the suspect.
+    warn "the environment link reconciled but its tunnel has not registered a
+    connection. The relay client is what the app connects through and it needs
+    outbound UDP/7844 to Cloudflare (it falls back to TCP/7844 for http2):
+        grep -i 'relay client' $SERVICE_LOG | tail
+        systemctl --user restart t3code.service"
+else
+    # No outcome either way. Genuinely inconclusive, so say so instead of
+    # naming a culprit: a relay call that fails is retried with backoff for
+    # several minutes before anything is written.
+    warn "the server has not reconciled the environment link yet — it logged
+    neither success nor failure since it started listening, so ${LINK_WAIT_SECONDS}s is
+    not long enough to call this broken. Watch for the outcome rather than
+    re-running anything:
+        tail -f $SERVICE_LOG | grep -i 'desired link'
+        t3 connect status"
 fi
 
 # -------------------------------------------------------------- claude code
