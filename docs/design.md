@@ -221,12 +221,24 @@ port.
 Tier 2 prints a warning naming itself. Claiming a distribution nothing tests is
 worse than not claiming it.
 
-One asymmetry worth knowing: `ansible-core` ships the `apt` and `dnf` modules
-but not `pacman`, which lives in `community.general`. So `provision.sh`
-installs `ansible-core` everywhere except Arch, where it installs the bundled
-`ansible` package instead. Adding a collection dependency for tier 1 would mean
-a galaxy install on every fresh container; paying it only where it is needed
-keeps the common path to one distribution package.
+Two Arch-specific things worth knowing, both of which cost a CI run.
+
+`ansible-core` ships the `apt` and `dnf` modules but not `pacman`, which lives
+in `community.general`. So `provision.sh` installs `ansible-core` everywhere
+except Arch, where it installs the bundled `ansible` package instead. Adding a
+collection dependency for tier 1 would mean a galaxy install on every fresh
+container; paying it only where it is needed keeps the common path to one
+distribution package. CI's lint job installs the collection anyway, because
+otherwise the linters cannot resolve the one task that uses it.
+
+And **Arch does not support partial upgrades.** Refreshing the index without
+also upgrading (`pacman -Sy`) leaves packages built against library versions
+that are no longer installed, and asks the mirror for files it has already
+replaced — which surfaces as a 404 on some unrelated dependency, not as
+anything that names the real cause. `ansible.builtin.package` runs a plain
+`pacman -S`, so the `base` role does a `community.general.pacman` refresh with
+`upgrade: true` first. That is the Arch counterpart of the apt cache refresh,
+not an extra step: on Arch the two cannot be separated.
 
 ## Design decisions
 

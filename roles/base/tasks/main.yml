@@ -17,6 +17,21 @@
     cache_valid_time: 1800
   when: ansible_os_family == 'Debian'
 
+# Arch does not support partial upgrades: refreshing the index without also
+# upgrading is how you get a package built against a library version that is no
+# longer installed, and how you get a 404 for a file the mirror has already
+# replaced. `pacman -Syu` in one transaction is the only supported operation,
+# which the bash implementation did in its index refresh and this port dropped
+# on the way to ansible.builtin.package — that module runs a plain `pacman -S`.
+#
+# This is the Arch counterpart of the apt refresh above, not an extra: on Arch
+# the refresh and the upgrade cannot be separated.
+- name: Refresh the package index and upgrade  # noqa package-latest
+  community.general.pacman:
+    update_cache: true
+    upgrade: true
+  when: ansible_os_family == 'Archlinux'
+
 - name: Install the base packages
   ansible.builtin.package:
     name: "{{ base_packages }}"

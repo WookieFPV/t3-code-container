@@ -138,7 +138,12 @@ install_ansible() {
         # package manager on Arch without it. Arch's `ansible` package bundles
         # the collections, which is cheaper than a galaxy install and keeps
         # this bootstrap network-independent beyond the distribution mirrors.
-        pacman -Sy --needed --noconfirm ansible
+        #
+        # -Syu, not -Sy. Arch does not support partial upgrades: refreshing the
+        # index without also upgrading leaves packages built against library
+        # versions that are no longer installed, and asks the mirror for files
+        # it has already replaced.
+        pacman -Syu --needed --noconfirm ansible
     elif command -v apk >/dev/null; then
         # Reached only so the message is useful. The playbook refuses Alpine
         # anyway — every long-running part of this setup is a systemd user unit.
