@@ -65,7 +65,23 @@ jobs:
           ! grep -qE '^ +(base|user|node) : ' /tmp/tags
 
       - name: ansible-lint
-        run: ansible-lint
+        run: |
+          ansible-lint && exit 0
+          # ansible-lint's summary line names the first reserved word out of the
+          # schema's own regex rather than the key that actually failed, which
+          # makes a schema[vars] finding close to unreadable. Dump the machine
+          # format and the parsed document when it fails, so the next person
+          # does not have to guess at which key upset it.
+          echo "::group::ansible-lint diagnostics"
+          ansible-lint --version
+          ansible-lint -f json || true
+          python3 -c "
+          import yaml
+          d = yaml.safe_load(open('inventory/group_vars/all.yml'))
+          print('top-level keys:', sorted(d))
+          "
+          echo "::endgroup::"
+          exit 1
 
   # The package layer, on every family we claim to name packages for. No
   # systemd, so this is limited to the base role — which is exactly the role
