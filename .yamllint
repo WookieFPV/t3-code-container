@@ -10,6 +10,10 @@ extends: default
 
 ignore: |
   .github/
+  # The linters test/lint.sh installs for itself. yamllint does not read
+  # .gitignore, so an ignored directory full of other projects' YAML is still
+  # hundreds of findings unless it is named here too.
+  .venv-lint/
 
 rules:
   # Task names and fail_msg strings are prose. Wrapping them to 80 would mean

@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Run the same checks CI runs, before the commit rather than after the push.
+#
+# Enable with:
+#
+#   git config core.hooksPath .githooks
+#
+# Roughly ten seconds once .venv-lint exists. `git commit --no-verify` skips it
+# when you genuinely mean to commit something that does not lint yet.
+#
+# It lints the working tree, not the index, so a partially staged file is
+# checked in the state you have it in rather than the state you are committing.
+# That is the useful direction: it catches the problem while you are still in
+# the file.
+set -uo pipefail
+
+REPO_DIR=$(git rev-parse --show-toplevel)
+
+# Only when something it actually checks has changed. A docs-only or
+# workflow-only commit should not pay for a full ansible-lint run.
+if ! git diff --cached --name-only |
+        grep -qE '\.(yml|yaml|sh)$|^ansible\.cfg$|^\.(yamllint|ansible-lint)$'; then
+    exit 0
+fi
+
+exec "$REPO_DIR/test/lint.sh"

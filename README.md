@@ -236,9 +236,24 @@ journalctl --user -u t3-update.service         # what the last update did
 ## Tests
 
 ```bash
+./test/lint.sh                                  # everything CI's lint job runs
 ./test/unit.sh                                  # the shipped scripts; no root, one second
 sudo ./test/install-check.sh --profile minimal  # install twice, assert changed=0
 ```
+
+**Run `./test/lint.sh` before you push.** CI runs that same script rather than
+its own copy of the commands, so a green run here is a green lint job there. It
+installs what it needs into `.venv-lint/` on first use — no root, nothing to
+read first — and takes about ten seconds after that.
+
+To have it run itself:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+That enables a pre-commit hook which lints whenever the commit touches a
+`.yml`, `.yaml` or `.sh` file. `git commit --no-verify` skips it.
 
 `install-check.sh` is destructive — run it in a throwaway container, which is
 what [CI](.github/workflows/ci.yml) does.
@@ -254,7 +269,8 @@ what [CI](.github/workflows/ci.yml) does.
 | `tasks/` | The pre_tasks and post_tasks every profile shares |
 | `inventory/local.yml` | The only inventory: this machine, no network |
 | `pve/create-container.sh` | Creates and provisions an LXC container; runs on the Proxmox host |
-| `test/` | Unit tests and the idempotency check |
+| `test/` | The lint entry point, unit tests and the idempotency check |
+| `.githooks/pre-commit` | Opt-in hook that runs `test/lint.sh` before a commit |
 | `docs/design.md` | Why it is built this way, and the failure modes |
 
 ## Not covered
