@@ -23,7 +23,12 @@ app_home: "/home/{{ app_user }}"
 # tasks/preflight.yml to look for. Kept in step with become_method in
 # ansible.cfg by hand: Ansible has no variable that reports the method actually
 # in force, and guessing one wrong here would fail every run at task three.
-become_exe: su
+#
+# Not named become_exe: that is one of Ansible's own connection settings, and
+# defining it as an ordinary variable earns a "reserved name" warning on every
+# run — plus it would really override the become executable if the name ever
+# stopped being merely reserved. This is only a name to look for on $PATH.
+become_tool: su
 
 # User-owned npm prefix, so `npm i -g` never needs root.
 npm_prefix: "{{ app_home }}/.local"

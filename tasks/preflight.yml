@@ -25,20 +25,20 @@
 # way provisioned. Ask before doing any of that work.
 - name: Look for the tool that drops privileges to the app user
   ansible.builtin.command:
-    argv: [/bin/sh, -c, "command -v {{ become_exe }} >/dev/null"]
-  register: preflight_become_exe
+    argv: [/bin/sh, -c, "command -v {{ become_tool }} >/dev/null"]
+  register: preflight_become_tool
   changed_when: false
   failed_when: false
   tags: always
 
 - name: Refuse to start without it
   ansible.builtin.assert:
-    that: preflight_become_exe.rc == 0
+    that: preflight_become_tool.rc == 0
     fail_msg: >-
-      {{ become_exe }} is not installed, and it is what every task that runs as
+      {{ become_tool }} is not installed, and it is what every task that runs as
       {{ app_user }} needs (become_method in ansible.cfg). Install it — on
-      {{ ansible_os_family }} it is part of {{ 'util-linux' if become_exe == 'su' else become_exe }}
-      — or point become_method and become_exe at something this box does have.
+      {{ ansible_os_family }} it is part of {{ 'util-linux' if become_tool == 'su' else become_tool }}
+      — or point become_method and become_tool at something this box does have.
     quiet: true
   tags: always
 
