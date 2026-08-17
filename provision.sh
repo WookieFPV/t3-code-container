@@ -120,6 +120,43 @@ fi
 
 [[ $EUID -eq 0 ]] || die "run as root (the roles create users and install packages)"
 
+# ------------------------------------------------------ the bootstrap locale
+# A stock container image generates no locales, but `pct exec` and ssh both
+# carry LANG in from wherever you came from — so LANG names a locale this box
+# does not have yet. apt answers with a wall of perl "Falling back to the
+# standard locale" warnings, and ansible-core 2.19 refuses to start at all:
+#
+#     ERROR: Ansible could not initialize the preferred locale: unsupported
+#     locale setting
+#
+# Generating the real locale is roles/base/tasks/locale.yml's job, and that
+# cannot run until Ansible does. So before anything else, check the inherited
+# settings against what glibc actually has and, if they are not there, fall
+# back for the duration of this script to C.UTF-8 — built into glibc, needing
+# no locale-gen — or to plain C on an image too old to carry it. This only
+# changes the bootstrap's own environment; the default LANG the base role
+# writes is still `locale` from the inventory.
+locale_is_generated() {
+    # `locale -a` reports the generated form: en_US.utf8, not en_US.UTF-8.
+    local want
+    want=$(tr 'A-Z' 'a-z' <<<"$1" | sed 's/utf-8$/utf8/')
+    locale -a 2>/dev/null | tr 'A-Z' 'a-z' | grep -qxF "$want"
+}
+
+want_locale=${LC_ALL:-${LANG:-}}
+if [[ -n $want_locale ]] && ! locale_is_generated "$want_locale"; then
+    # LC_CTYPE and friends are set independently of LANG and would keep
+    # warning on their own, so clear the whole category set rather than
+    # only the two we read.
+    unset "${!LC_@}"
+    if locale_is_generated C.UTF-8; then
+        export LANG=C.UTF-8 LC_ALL=C.UTF-8
+    else
+        export LANG=C LC_ALL=C
+    fi
+    log "locale $want_locale is not generated here; using $LANG until it is"
+fi
+
 # ------------------------------------------------------- ansible-core itself
 # Installed from the distribution rather than pip: it is the only dependency
 # this bootstrap has, and a distribution package needs no virtualenv, no
