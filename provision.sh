@@ -19,6 +19,21 @@ PLAYBOOK_DIR="$REPO_DIR/playbooks"
 die() { printf '\033[31merror\033[0m %s\n' "$*" >&2; exit 1; }
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 
+# Run something noisy, and say nothing unless it fails. Installing ansible-core
+# pulls in fifty packages and apt narrates every one of them twice, which is a
+# hundred and fifty lines about a dependency nobody asked for — until it breaks,
+# and then every one of those lines is worth having. So: buffer, and print the
+# lot on a non-zero exit. Errors keep their place in the output relative to our
+# own logging, because nothing else is being printed while this runs.
+quietly() {
+    local output rc=0
+    output=$(mktemp)
+    "$@" >"$output" 2>&1 || rc=$?
+    ((rc == 0)) || cat "$output" >&2
+    rm -f "$output"
+    return $rc
+}
+
 usage() {
     cat <<'EOF'
 Usage: ./provision.sh [options] [-- ansible-playbook options]
@@ -41,6 +56,13 @@ Examples:
   ./provision.sh node t3                      # same, positional
   ./provision.sh -e timezone=Europe/Berlin    # any setting can be overridden
   ./provision.sh --dry-run
+  ./provision.sh -- -v                        # every task, not only the ones
+                                              # that changed something
+
+A normal run prints what changed, what failed and what to do next; tasks that
+found the box already in the wanted state say nothing. `-- -v` prints all of
+them, and the package installs this bootstrap does itself are shown only if
+they fail.
 
 Settings come from, lowest precedence first: inventory/group_vars/all.yml, the profile
 playbook, then -e. `--list` shows what each profile is for.
@@ -164,10 +186,11 @@ fi
 install_ansible() {
     log "installing ansible-core"
     if   command -v apt-get >/dev/null; then
-        DEBIAN_FRONTEND=noninteractive apt-get update -qq
-        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ansible-core
+        export DEBIAN_FRONTEND=noninteractive
+        quietly apt-get update -qq
+        quietly apt-get install -y -qq ansible-core
     elif command -v dnf >/dev/null; then
-        dnf -q install -y ansible-core
+        quietly dnf -q install -y ansible-core
     elif command -v pacman >/dev/null; then
         # `ansible`, not `ansible-core`, and only here. ansible-core ships the
         # apt and dnf modules but not pacman — that one lives in
@@ -180,7 +203,7 @@ install_ansible() {
         # index without also upgrading leaves packages built against library
         # versions that are no longer installed, and asks the mirror for files
         # it has already replaced.
-        pacman -Syu --needed --noconfirm ansible
+        quietly pacman -Syu --needed --noconfirm ansible
     elif command -v apk >/dev/null; then
         # Reached only so the message is useful. The playbook refuses Alpine
         # anyway — every long-running part of this setup is a systemd user unit.

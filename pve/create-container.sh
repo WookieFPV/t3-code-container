@@ -35,6 +35,21 @@ REPO_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 die() { printf '\033[31merror\033[0m %s\n' "$*" >&2; exit 1; }
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 
+# Run something noisy, and say nothing unless it fails — same helper as
+# provision.sh, kept here because these two scripts run on different machines
+# and neither may assume the other is present. `pct create` reports every
+# logical volume, every superblock backup and every SSH host key it generates;
+# that is the container image being unpacked exactly the way it always is, and
+# it is only worth reading when the create fails.
+quietly() {
+    local output rc=0
+    output=$(mktemp)
+    "$@" >"$output" 2>&1 || rc=$?
+    ((rc == 0)) || cat "$output" >&2
+    rm -f "$output"
+    return $rc
+}
+
 # ------------------------------------------------------------------- --log
 # LOG_FILE=FILE keeps the whole run — stdout and stderr — appended to FILE as
 # plain text (the terminal keeps its colours). Same mechanism as provision.sh's
@@ -183,10 +198,10 @@ fi
 
 # -------------------------------------------------------------------- create
 log "creating CT $CTID ($CT_HOSTNAME) from $(basename "$tpl_file")"
-pct create "${args[@]}"
+quietly pct create "${args[@]}"
 
 log "starting"
-pct start "$CTID"
+quietly pct start "$CTID"
 
 # DHCP needs a moment; report the address so you can SSH straight in.
 for _ in {1..30}; do

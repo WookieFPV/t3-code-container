@@ -29,6 +29,8 @@ who has never touched Proxmox.
 ```
 provision.sh             install ansible-core, pick a profile, run the playbook
   ansible.cfg            ansible-core only, no collections
+  callback_plugins/      the stdout callback: what a run prints, and what it
+                         leaves out
   inventory/local.yml    this machine, connection: local
   inventory/group_vars/  settings shared by every profile — must live beside the
                          inventory, not at the repo root, or Ansible ignores it
@@ -94,6 +96,29 @@ The rule for what does *not* belong here: anything Ansible already reports on
 correctly. Installing a package, writing a unit file, creating a directory —
 those are tasks, and turning them into a script would throw away change
 reporting and `--check` for nothing.
+
+### What a run prints
+
+A full provisioning run is around a hundred tasks, and on a box that is already
+provisioned all but a few of them end `ok` — they are conditions being checked,
+which is the point of writing them as tasks, but a screen of `ok:` is not
+something anyone reads. So the output is filtered down to what actually
+happened:
+
+- **Tasks that changed something, and tasks that failed**, exactly as Ansible
+  prints them.
+- **The debug tasks**, which are the run talking to you on purpose: what
+  distribution this is and whether it is tested, and the closing note about the
+  OAuth device codes only a human can finish.
+- **The play recap**, whose `changed=0` on a second run is the idempotency
+  claim this repo makes — and is what `test/install-check.sh` asserts on.
+
+Everything else says nothing. That is `callback_plugins/concise.py`, forty
+lines subclassing the in-core `default` callback, plus `display_ok_hosts =
+False` in `ansible.cfg`; `provision.sh -- -v` turns the full task-by-task output
+back on. The same principle applies to the two scripts: the package manager
+installing ansible-core and `pct create` unpacking an image are buffered and
+printed only if they exit non-zero (`quietly()` in both scripts).
 
 ## Writing a role
 
