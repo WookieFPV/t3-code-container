@@ -189,6 +189,26 @@ else
     ok "already authorized"
 fi
 
+# Push notifications and Live Activities on the phone are off until something
+# turns them on, and nothing in the install does. On by default here: this box
+# is driven from a mobile client, and an agent that finishes a long run in
+# silence is the whole reason to be running one on a server.
+#
+# `publish` reads as a toggle in --help but is not one — it writes true unless
+# --disable is passed, so a re-run cannot flip it off. The status check is only
+# to keep the output honest about which run did it. Note that it cannot tell
+# "never set" from "turned off on purpose" (both print `disabled`), so a box
+# that was deliberately quieted gets it back on the next run of this script —
+# --disable it again, or drop this block.
+if connect_status | grep -q 'Publish agent activity: enabled'; then
+    ok "already publishing agent activity to mobile clients"
+elif t3 connect publish >/dev/null; then
+    ok "publishing agent activity to mobile clients (t3 connect publish --disable to stop)"
+else
+    warn "could not enable agent-activity publishing — 't3 connect publish' to see why.
+    Everything else works without it; you just get no push notifications."
+fi
+
 # t3's own background setup, if it ever ran, would land here alongside t3's
 # installed unit; so would a t3.service left by an older version of this repo.
 mapfile -t stray < <(
