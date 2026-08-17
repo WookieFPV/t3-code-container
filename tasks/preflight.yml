@@ -37,8 +37,9 @@
     fail_msg: >-
       {{ become_tool }} is not installed, and it is what every task that runs as
       {{ app_user }} needs (become_method in ansible.cfg). Install it — on
-      {{ ansible_os_family }} it is part of {{ 'util-linux' if become_tool == 'su' else become_tool }}
-      — or point become_method and become_tool at something this box does have.
+      {{ ansible_os_family }} it is part of
+      {{ 'util-linux' if become_tool == 'su' else become_tool }} — or point
+      become_method and become_tool at something this box does have.
     quiet: true
   tags: always
 
