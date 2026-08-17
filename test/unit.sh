@@ -1,183 +1,282 @@
 #!/usr/bin/env bash
-# Unit tests for the library layer. No root, no network, no package manager —
-# these run in a second and are the first thing CI does.
+# Unit tests for the shipped helper scripts. No root, no network, no package
+# manager — these run in a second and are the first thing CI does.
 #
 #   ./test/unit.sh
 #
-# shellcheck disable=SC1090  # sources every profile in the directory, by design
+# The bash implementation had a library layer to test. The playbooks replaced
+# most of it with Ansible modules, which are somebody else's tests — what is
+# left, and what these cover, is the handful of scripts the roles still ship
+# because their logic is genuinely intricate: signing-key pinning, the npm
+# allow-scripts check, and the pinned-runtime check. Those are exactly the
+# pieces worth being able to run on their own, and this is the payoff for
+# keeping them as scripts rather than dissolving them into tasks.
 set -uo pipefail
 
 REPO_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-export REPO_DIR
-source "$REPO_DIR/lib/common.sh"
-set +e   # common.sh sets -e; a failing assertion must not abort the run
 
 pass=0 fail=0
 
-check() {   # check DESC EXPECTED ACTUAL
-    if [[ $2 == "$3" ]]; then
-        pass=$((pass + 1))
-    else
-        fail=$((fail + 1))
-        printf '\033[31mFAIL\033[0m %s\n      expected: %q\n      actual:   %q\n' "$1" "$2" "$3"
-    fi
-}
+ok()   { pass=$((pass + 1)); }
+bad()  { fail=$((fail + 1)); printf '\033[31mFAIL\033[0m %s\n' "$*"; }
 
-check_fails() {   # check_fails DESC CMD...   — the command must exit non-zero
+succeeds() {   # succeeds DESC CMD...
     local desc=$1; shift
-    # A subshell, because these helpers report failure with die(), which exits
-    # the shell it runs in. Production callers wrap them in a command
-    # substitution for the same reason.
-    if ( "$@" ) >/dev/null 2>&1; then
-        fail=$((fail + 1))
-        printf '\033[31mFAIL\033[0m %s (expected a non-zero exit)\n' "$desc"
+    if "$@" >/dev/null 2>&1; then ok; else bad "$desc (expected exit 0)"; fi
+}
+
+fails() {      # fails DESC CMD...
+    local desc=$1; shift
+    if "$@" >/dev/null 2>&1; then bad "$desc (expected a non-zero exit)"; else ok; fi
+}
+
+says() {       # says DESC PATTERN CMD...  — output must match PATTERN
+    local desc=$1 pattern=$2; shift 2
+    local out
+    out=$("$@" 2>&1)
+    if [[ $out == *"$pattern"* ]]; then
+        ok
     else
-        pass=$((pass + 1))
+        bad "$desc
+      expected output containing: $pattern
+      actual: $out"
     fi
 }
 
-# --------------------------------------------------------------- os detection
-os_detect
-check "OS_FAMILY is set"                      1 "$([[ -n $OS_FAMILY ]] && echo 1)"
-check "PKG_MGR is set"                        1 "$([[ -n $PKG_MGR ]] && echo 1)"
-check "OS_ARCH is set"                        1 "$([[ -n $OS_ARCH ]] && echo 1)"
-check "OS_VERSION_MAJOR is numeric"           1 "$([[ $OS_VERSION_MAJOR =~ ^[0-9]*$ ]] && echo 1)"
-
-# --------------------------------------------------------------- package map
-# pkg_map short-circuits on debian, so exercise the translation table directly.
-map_as() { ( OS_FAMILY=$1; pkg_map "$2" ); }
-
-check "debian passes names through" "build-essential" "$(map_as debian build-essential)"
-check "rhel toolchain"              "gcc gcc-c++ make" "$(map_as rhel build-essential)"
-check "arch toolchain"              "base-devel"       "$(map_as arch build-essential)"
-check "rhel dnsutils"               "bind-utils"       "$(map_as rhel bind9-dnsutils)"
-check "arch python"                 "python"           "$(map_as arch python3)"
-check "arch gh"                     "github-cli"       "$(map_as arch gh)"
-check "debian polkit daemon"        "polkitd"          "$(map_as debian polkit)"
-check "rhel polkit daemon"          "polkit"           "$(map_as rhel polkit)"
-check "apt-only package dropped"    ""                 "$(map_as rhel apt-transport-https)"
-check "arch has no locale package"  ""                 "$(map_as arch locales)"
-check "unknown name passes through" "ripgrep"          "$(map_as rhel ripgrep)"
-
-# ------------------------------------------------------------- role metadata
-check "base has no requirements"  ""      "$(roles_requires base)"
-check "user requires base"        "base"  "$(roles_requires user)"
-check "t3 requires node"          "node"  "$(roles_requires t3)"
-
-for r in $(roles_all); do
-    check "role '$r' has a description" 1 "$([[ -n $(roles_describe "$r") ]] && echo 1)"
-    check "role '$r' is executable"     1 "$([[ -x $ROLES_DIR/$r/install.sh ]] && echo 1)"
-done
-
-for t in "$REPO_DIR"/test/*.sh; do
-    # CI invokes these directly, so a missing +x fails eight jobs at once with
-    # "permission denied" and nothing about why. It has happened.
-    check "$(basename "$t") is executable" 1 "$([[ -x $t ]] && echo 1)"
-done
-
-# ------------------------------------------------------------ role resolution
-check "transitive deps, dependency-first" \
-    "base user node t3 t3-service" \
-    "$(roles_resolve t3-service | tr '\n' ' ' | sed 's/ $//')"
-
-check "a role is emitted once even when required twice" \
-    "base user node bun" \
-    "$(roles_resolve node bun | tr '\n' ' ' | sed 's/ $//')"
-
-check_fails "unknown role is rejected" roles_resolve definitely-not-a-role
-
-# A cycle must be named, not recursed into until bash gives up.
-cyc=$(mktemp -d)
-mkdir -p "$cyc/_x" "$cyc/_y"
-printf '#!/usr/bin/env bash\n# requires: _y\n# description: x\n' >"$cyc/_x/install.sh"
-printf '#!/usr/bin/env bash\n# requires: _x\n# description: y\n' >"$cyc/_y/install.sh"
-out=$( ROLES_DIR=$cyc roles_resolve _x 2>&1 )
-check "a dependency cycle is reported by name" 1 "$([[ $out == *"cycle involving role '_x'"* ]] && echo 1)"
-rm -rf "$cyc"
-
-# Metadata must come from the header only, so a role body mentioning the key
-# cannot change what the planner does.
-hdr=$(mktemp -d); mkdir -p "$hdr/_z"
-printf '#!/usr/bin/env bash\n# requires: base\n# description: real\n\necho "# description: fake"\n' >"$hdr/_z/install.sh"
-check "metadata stops at the end of the header" "real" "$(ROLES_DIR=$hdr roles_describe _z)"
-rm -rf "$hdr"
-
-# ------------------------------------------------------------------ profiles
-for p in "$REPO_DIR"/profiles/*.sh; do
-    name=$(basename "$p" .sh)
-    list=$( unset ROLES; . "$p"; printf '%s ' "${ROLES[@]}" )
-    # shellcheck disable=SC2086  # deliberate: $list is a role list to split
-    if out=$(roles_resolve $list 2>&1); then
-        pass=$((pass + 1))
+# Whole-output equality, for the cases where a substring would lie: "changed"
+# is a substring of "unchanged", so `says` cannot tell the two verdicts apart.
+prints() {     # prints DESC EXPECTED CMD...  — output must equal EXPECTED
+    local desc=$1 want=$2; shift 2
+    local out
+    out=$("$@" 2>&1)
+    if [[ $out == "$want" ]]; then
+        ok
     else
-        fail=$((fail + 1))
-        printf '\033[31mFAIL\033[0m profile %s does not resolve: %s\n' "$name" "$out"
+        bad "$desc
+      expected exactly: $want
+      actual: $out"
     fi
-    check "profile '$name' has a description" 1 \
-        "$( ( unset PROFILE_DESCRIPTION; . "$p"; [[ -n ${PROFILE_DESCRIPTION:-} ]] && echo 1 ) )"
-done
+}
 
-# The t3 role refuses to run unless the allowlist contains its native deps, so
-# the profile that installs it has to supply them. Cheap to assert, and it is
-# exactly the kind of drift a role list edit introduces.
-t3_allow=$( . "$REPO_DIR/profiles/t3.sh"; echo "$NPM_ALLOW_SCRIPTS" )
-check "t3 profile allows node-pty"         1 "$([[ ,$t3_allow, == *,node-pty,*        ]] && echo 1)"
-check "t3 profile allows msgpackr-extract" 1 "$([[ ,$t3_allow, == *,msgpackr-extract,* ]] && echo 1)"
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
 
-# ------------------------------------------------ t3-service linger shim
+# ------------------------------------------------------ loginctl linger shim
 # t3 aborts the install when `loginctl enable-linger` exits non-zero, so the
 # shim answers exactly that self-call from the linger marker on disk — and only
 # when the marker is there. Both branches matter: confirming linger that is
 # enabled is the whole point, and confirming linger that is *not* enabled would
 # buy a clean install and pay for it with a service systemd kills at logout.
-# LINGER_DIR is overridable so both can be exercised without root. The
-# forwarded exit codes are compared against the real loginctl so the assertions
-# hold whichever user runs the tests.
-shim="$ROLES_DIR/t3-service/files/loginctl"
-check "loginctl shim exists"        1 "$([[ -f $shim ]] && echo 1)"
-check "loginctl shim is executable" 1 "$([[ -x $shim ]] && echo 1)"
+# LINGER_DIR is overridable so both can be exercised without root.
+SHIM="$REPO_DIR/roles/t3-service/files/loginctl"
+succeeds "loginctl shim is executable" test -x "$SHIM"
 
-linger_dir=$(mktemp -d)
-: >"$linger_dir/$(id -un)"
-check "shim confirms 'enable-linger' when the marker is there" 0 \
-    "$( LINGER_DIR=$linger_dir "$shim" enable-linger >/dev/null 2>&1; echo $? )"
+if [[ -x /usr/bin/loginctl ]]; then
+    linger_dir="$tmp/linger"; install -d "$linger_dir"
 
-empty_dir=$(mktemp -d)
-check "shim forwards 'enable-linger' when the marker is missing" \
-    "$( /usr/bin/loginctl enable-linger >/dev/null 2>&1; echo $? )" \
-    "$( LINGER_DIR=$empty_dir "$shim" enable-linger >/dev/null 2>&1; echo $? )"
-rm -rf "$linger_dir" "$empty_dir"
+    # The forwarded cases are compared against the real loginctl, so the
+    # assertions hold whichever user runs the tests.
+    same_rc() {   # same_rc DESC ARGS... — the shim forwards with loginctl's exit code
+        local desc=$1 real shim_rc
+        desc=$1; shift
+        /usr/bin/loginctl "$@" >/dev/null 2>&1; real=$?
+        LINGER_DIR=$linger_dir "$SHIM" "$@" >/dev/null 2>&1; shim_rc=$?
+        if [[ $shim_rc -eq $real ]]; then ok; else
+            bad "$desc (shim exited $shim_rc, real loginctl exited $real)"
+        fi
+    }
 
-check "shim forwards other commands" \
-    "$( /usr/bin/loginctl --version >/dev/null 2>&1; echo $? )" \
-    "$( "$shim" --version >/dev/null 2>&1; echo $? )"
-check "shim does not swallow 'enable-linger <user>'" \
-    "$( /usr/bin/loginctl enable-linger definitely-not-a-user >/dev/null 2>&1; echo $? )" \
-    "$( "$shim" enable-linger definitely-not-a-user >/dev/null 2>&1; echo $? )"
+    : >"$linger_dir/$(id -un)"
+    succeeds "shim confirms 'enable-linger' when the marker is there" \
+        env LINGER_DIR="$linger_dir" "$SHIM" enable-linger
 
-# ------------------------------------------------------------------ fs helpers
-tmp=$(mktemp -d)
-# Own the files as whoever is running the tests: install_file chowns, and these
-# tests deliberately do not need root.
-me="$(id -un):$(id -gn)"
-printf 'one\n' >"$tmp/src"
-install_file "$tmp/src" "$tmp/dest" 0644 "$me" >/dev/null; wrote=$?
-check "install_file writes a new file"     0 "$wrote"
-install_file "$tmp/src" "$tmp/dest" 0644 "$me" >/dev/null; wrote=$?
-check "install_file is a no-op when equal" 1 "$wrote"
-printf 'two\n' >"$tmp/src"
-install_file "$tmp/src" "$tmp/dest" 0644 "$me" >/dev/null; wrote=$?
-check "install_file rewrites on change"    0 "$wrote"
+    rm "$linger_dir/$(id -un)"
+    same_rc "shim forwards 'enable-linger' when the marker is missing" enable-linger
+    same_rc "shim forwards other commands" --version
+    same_rc "shim does not swallow 'enable-linger <user>'" \
+        enable-linger definitely-not-a-user
+else
+    printf '\033[33mskip\033[0m loginctl is not installed — shim tests skipped\n'
+fi
 
-ensure_line "$tmp/f" 'export X=1' "$me" >/dev/null
-ensure_line "$tmp/f" 'export X=1' "$me" >/dev/null
-check "ensure_line does not duplicate" 1 "$(grep -c 'export X=1' "$tmp/f")"
-rm -rf "$tmp"
+# ------------------------------------------------ check-npmrc-allow-scripts.sh
+# The single most expensive failure mode in this repo: an .npmrc that does not
+# allow t3's native install scripts produces a server that installs cleanly and
+# crash-loops at startup.
+CHECK_NPMRC="$REPO_DIR/roles/t3/files/check-npmrc-allow-scripts.sh"
 
-# user_dir must refuse to touch anything outside the app user's home.
-check_fails "user_dir refuses paths outside APP_HOME" \
-    bash -c "REPO_DIR=$REPO_DIR; source $REPO_DIR/lib/common.sh; user_dir /etc/evil"
+printf 'prefix=/home/devuser/.local\nallow-scripts=node-pty,msgpackr-extract\n' \
+    >"$tmp/npmrc-good"
+printf 'prefix=/home/devuser/.local\n' >"$tmp/npmrc-no-line"
+printf 'allow-scripts=node-pty\n' >"$tmp/npmrc-partial"
+# Last assignment wins in an npmrc, which the check has to reproduce.
+printf 'allow-scripts=node-pty\nallow-scripts=node-pty,msgpackr-extract\n' \
+    >"$tmp/npmrc-last-wins"
+printf 'allow-scripts=node-pty,msgpackr-extract\nallow-scripts=esbuild\n' \
+    >"$tmp/npmrc-last-wins-bad"
 
-# ---------------------------------------------------------------------- done
+succeeds "npmrc with both deps" \
+    "$CHECK_NPMRC" "$tmp/npmrc-good" node-pty,msgpackr-extract
+fails "npmrc with no allow-scripts line" \
+    "$CHECK_NPMRC" "$tmp/npmrc-no-line" node-pty,msgpackr-extract
+fails "npmrc missing one dep" \
+    "$CHECK_NPMRC" "$tmp/npmrc-partial" node-pty,msgpackr-extract
+succeeds "npmrc where the last line has both" \
+    "$CHECK_NPMRC" "$tmp/npmrc-last-wins" node-pty,msgpackr-extract
+fails "npmrc where the last line drops them again" \
+    "$CHECK_NPMRC" "$tmp/npmrc-last-wins-bad" node-pty,msgpackr-extract
+fails "npmrc that does not exist" \
+    "$CHECK_NPMRC" "$tmp/nonexistent" node-pty
+says "the error names the missing dependency" "msgpackr-extract" \
+    "$CHECK_NPMRC" "$tmp/npmrc-partial" node-pty,msgpackr-extract
+says "the error says how to fix it" "provision.sh --only node,t3" \
+    "$CHECK_NPMRC" "$tmp/npmrc-partial" node-pty,msgpackr-extract
+fails "wrong argument count" "$CHECK_NPMRC" "$tmp/npmrc-good"
+
+# A substring must not count as a match: an allowlist of "node-pty-prebuilt"
+# does not allow "node-pty".
+printf 'allow-scripts=node-pty-prebuilt\n' >"$tmp/npmrc-substring"
+fails "a longer package name is not a match" \
+    "$CHECK_NPMRC" "$tmp/npmrc-substring" node-pty
+
+# ------------------------------------------------------------ verify-keyring.sh
+VERIFY_KEYRING="$REPO_DIR/roles/keyring/files/verify-keyring.sh"
+
+fails "verify-keyring with too few arguments" "$VERIFY_KEYRING" /dev/null NAME
+fails "verify-keyring on a file that does not exist" \
+    "$VERIFY_KEYRING" "$tmp/nonexistent" NAME AAAA
+says "verify-keyring says which file it cannot read" "cannot read" \
+    "$VERIFY_KEYRING" "$tmp/nonexistent" NAME AAAA
+
+if command -v gpg >/dev/null; then
+    # A real key, generated here, so the test needs no network and no fixture
+    # that could rot.
+    export GNUPGHOME="$tmp/gnupg"
+    install -d -m 0700 "$GNUPGHOME"
+    gpg --batch --quiet --passphrase '' --quick-generate-key \
+        'Keyring Test <test@example.invalid>' default default never >/dev/null 2>&1
+    gpg --batch --quiet --export >"$tmp/key.gpg" 2>/dev/null
+    fpr=$(gpg --with-colons --show-keys "$tmp/key.gpg" 2>/dev/null |
+        awk -F: '$1=="pub"{p=1;next} $1=="fpr"&&p{print $10;p=0}')
+
+    if [[ -n ${fpr:-} ]]; then
+        succeeds "a pinned key verifies" \
+            "$VERIFY_KEYRING" "$tmp/key.gpg" Test "$fpr"
+        succeeds "a pinned key among several pins verifies" \
+            "$VERIFY_KEYRING" "$tmp/key.gpg" Test AAAABBBBCCCC "$fpr"
+        fails "an unpinned key is refused" \
+            "$VERIFY_KEYRING" "$tmp/key.gpg" Test AAAABBBBCCCC
+        says "the refusal names the offending fingerprint" "UNPINNED signing key $fpr" \
+            "$VERIFY_KEYRING" "$tmp/key.gpg" Test AAAABBBBCCCC
+        # Armored input must work too: NodeSource ships its key that way and the
+        # role installs it verbatim rather than dearmoring.
+        gpg --batch --quiet --armor --export >"$tmp/key.asc" 2>/dev/null
+        succeeds "an armored keyring verifies the same way" \
+            "$VERIFY_KEYRING" "$tmp/key.asc" Test "$fpr"
+    else
+        printf '\033[33mskip\033[0m could not generate a test key\n'
+    fi
+
+    printf 'not a key\n' >"$tmp/garbage"
+    fails "a file with no PGP keys is refused" \
+        "$VERIFY_KEYRING" "$tmp/garbage" Test AAAA
+else
+    printf '\033[33mskip\033[0m gpg is not installed — keyring tests skipped\n'
+fi
+
+# ------------------------------------------------------- check-pinned-runtime.sh
+CHECK_RUNTIME="$REPO_DIR/roles/t3-service/files/check-pinned-runtime.sh"
+
+fails "check-pinned-runtime with no argument" "$CHECK_RUNTIME"
+
+if command -v node >/dev/null; then
+    # No service-state.json at all: warn and pass, rather than failing a
+    # provisioning run over a check that has nothing to look at.
+    install -d "$tmp/t3-empty/runtime"
+    succeeds "a missing service-state.json is not fatal" \
+        "$CHECK_RUNTIME" "$tmp/t3-empty"
+    says "and it says why" "skipping the node-pty check" \
+        "$CHECK_RUNTIME" "$tmp/t3-empty"
+
+    # An activeVersion whose node-pty is not there must fail loudly: this is the
+    # runtime systemd would boot.
+    install -d "$tmp/t3-broken/runtime/versions/1.2.3/node_modules"
+    printf '{"activeVersion":"1.2.3"}\n' >"$tmp/t3-broken/runtime/service-state.json"
+    fails "an unloadable node-pty is fatal" \
+        "$CHECK_RUNTIME" "$tmp/t3-broken"
+    says "the error names the rebuild command" "npm rebuild node-pty" \
+        "$CHECK_RUNTIME" "$tmp/t3-broken"
+
+    # A version whose node-pty does load.
+    install -d "$tmp/t3-ok/runtime/versions/9.9.9/node_modules/node-pty"
+    printf '{"activeVersion":"9.9.9"}\n' >"$tmp/t3-ok/runtime/service-state.json"
+    printf '{"name":"node-pty","main":"index.js"}\n' \
+        >"$tmp/t3-ok/runtime/versions/9.9.9/node_modules/node-pty/package.json"
+    printf 'module.exports = {};\n' \
+        >"$tmp/t3-ok/runtime/versions/9.9.9/node_modules/node-pty/index.js"
+    succeeds "a loadable node-pty passes" "$CHECK_RUNTIME" "$tmp/t3-ok"
+    says "and says which version it checked" "9.9.9" "$CHECK_RUNTIME" "$tmp/t3-ok"
+else
+    printf '\033[33mskip\033[0m node is not installed — runtime tests skipped\n'
+fi
+
+# ------------------------------------------------------------ github-host-keys
+HOST_KEYS="$REPO_DIR/roles/github-ssh/files/github-host-keys.sh"
+fails "github-host-keys with no arguments" "$HOST_KEYS"
+fails "github-host-keys with no fingerprints" "$HOST_KEYS" "$tmp/known_hosts"
+
+# The rest with both sources stubbed on PATH, so the outage path — the one that
+# only runs when api.github.com is down and therefore never gets exercised by
+# an ordinary run — is tested here rather than during the next incident. The
+# key is generated locally: pinning has to be checked against a real
+# fingerprint, and this keeps that true without reaching the network.
+if command -v ssh-keygen >/dev/null; then
+    keys=$tmp/keys; mkdir -p "$keys"
+    ssh-keygen -q -t ed25519 -N '' -C '' -f "$keys/id" </dev/null
+    key_line="github.com $(cut -d' ' -f1,2 "$keys/id.pub")"
+    printf '%s\n' "$key_line" >"$keys/scanned"
+    key_fpr=$(ssh-keygen -lf "$keys/scanned" | awk '{print $2}')
+
+    stub=$tmp/bin; mkdir -p "$stub"
+    # 22 is what `curl -f` exits on an HTTP error, which is how the 504 that
+    # started this arrived.
+    printf '#!/bin/sh\nexit 22\n' >"$stub/curl"
+    printf '#!/bin/sh\nprintf "%%s\\n" "# github.com:22 SSH-2.0-banner" "%s"\n' \
+        "$key_line" >"$stub/ssh-keyscan"
+    chmod 0755 "$stub/curl" "$stub/ssh-keyscan"
+
+    host_keys() { PATH="$stub:$PATH" "$HOST_KEYS" "$@"; }
+    # The verdict the Ansible task reads, which is the last line and nothing
+    # else — checked exactly, so "unchanged" cannot pass for "changed".
+    verdict() { host_keys "$@" 2>/dev/null | tail -n 1; }
+
+    # A separate file per assertion: the script is idempotent by design, so a
+    # run that shares a target with an earlier one can only ever say
+    # "unchanged".
+    says "a dead API falls back to ssh-keyscan" "from ssh-keyscan" \
+        host_keys "$tmp/known_hosts_fallback" "$key_fpr"
+
+    kh=$tmp/known_hosts_merge
+    printf 'gitlab.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAfu\n' >"$kh"
+    prints "and reports that it wrote" "changed" verdict "$kh" "$key_fpr"
+    prints "a second run writes nothing" "unchanged" verdict "$kh" "$key_fpr"
+    succeeds "other forges' entries survive the merge" grep -q '^gitlab\.com ' "$kh"
+    succeeds "the scanned key is pinned under both hostnames" \
+        grep -q '^github\.com,ssh\.github\.com ' "$kh"
+    fails "the banner comment stays out of known_hosts" grep -q '^#' "$kh"
+    fails "an unpinned key stops the run" \
+        host_keys "$tmp/known_hosts_unpinned" "SHA256:notthekeywejustmade"
+    says "and says so" "UNPINNED" \
+        host_keys "$tmp/known_hosts_unpinned" "SHA256:notthekeywejustmade"
+
+    # Both sources silent is the one case where there is nothing safe to do.
+    printf '#!/bin/sh\nexit 1\n' >"$stub/ssh-keyscan"
+    fails "no source at all is a failure, not an empty file" \
+        host_keys "$tmp/known_hosts_nosource" "$key_fpr"
+else
+    printf '\033[33mskip\033[0m ssh-keygen is not installed — host-key tests skipped\n'
+fi
+
+# ---------------------------------------------------------------------- report
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]

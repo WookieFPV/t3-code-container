@@ -1,0 +1,18 @@
+---
+# The only inventory there is: this machine, reached without a network.
+#
+# `ansible_connection: local` means no SSH server, no keys and no IP have to
+# exist for provisioning to work — which is what lets pve/create-container.sh
+# drive a brand-new container over `pct exec` alone, before it has an address.
+#
+# To provision several boxes from one control node instead, write a second
+# inventory with real hosts and pass it with `-i`; the roles themselves contain
+# nothing local-only.
+all:
+  hosts:
+    localhost:
+      ansible_connection: local
+      # Use the interpreter ansible itself is running under, rather than
+      # letting discovery pick a different python3 than the one that has the
+      # modules ansible-core needs.
+      ansible_python_interpreter: "{{ ansible_playbook_python }}"

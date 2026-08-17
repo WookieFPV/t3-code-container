@@ -1,0 +1,76 @@
+---
+# Generate a UTF-8 locale and make it the default.
+#
+# A stock container image generates no locales, but `pct enter` and ssh both
+# carry LANG in from wherever you came from — so every package operation answers
+# with a wall of "locale: Cannot set LC_CTYPE" and perl "Falling back to the
+# standard locale". Harmless, but it buries real output.
+
+- name: Which locales are generated?
+  ansible.builtin.command: locale -a
+  register: base_locales
+  changed_when: false
+  failed_when: false
+
+- name: Is the one we want among them?
+  ansible.builtin.set_fact:
+    base_locale_is_generated: >-
+      {{ (locale.split('.')[0] ~ '.utf8') | lower
+         in (base_locales.stdout_lines | map('lower') | list) }}
+
+- name: Generate the locale
+  when: base_locale_from_locale_gen | bool
+  block:
+    - name: List it in /etc/locale.gen
+      ansible.builtin.lineinfile:
+        path: /etc/locale.gen
+        line: "{{ locale }} UTF-8"
+        create: true
+        owner: root
+        group: root
+        mode: "0644"
+      register: base_locale_gen_line
+
+    # `locale -a` reports the generated form — en_US.utf8, not en_US.UTF-8. Both
+    # sides are lowercased before comparing: the haystack was already, and
+    # leaving the needle alone meant en_US.utf8 never matched en_us.utf8, so
+    # locale-gen ran on every single pass and no run was ever idempotent.
+    - name: Run locale-gen
+      ansible.builtin.command: locale-gen
+      when: base_locale_gen_line.changed or not base_locale_is_generated
+      changed_when: true
+
+- name: Warn when a RedHat langpack did not provide the locale
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: locale {{ locale }} is not available — install
+      glibc-langpack-{{ locale.split('_')[0] | lower }}.
+  when:
+    - not base_locale_from_locale_gen | bool
+    - not base_locale_is_generated
+
+# ------------------------------------------------------------- the default
+# One file, chosen per family, written with lineinfile.
+#
+# This started as a pair of shell blocks: one that read the current LANG out of
+# /etc/default/locale, /etc/locale.conf or `localectl status`, and one that set
+# it with update-locale, localectl or a redirect, whichever existed. It was
+# faithful to the bash implementation and it was not idempotent on Arch, where
+# there is no update-locale and `localectl` has no bus to talk to inside a
+# container — so the writer fell through to /etc/locale.conf while the reader
+# never agreed it had landed, and every single run reported a change.
+#
+# Both candidate files are plain KEY=value, which is precisely what lineinfile
+# is for. Writing the family's file directly is what update-locale and localectl
+# would have done anyway, it needs no systemd, and it is idempotent by
+# construction rather than by a comparison that has to be kept in step with the
+# write. base_locale_conf is set in vars/<family>.yml.
+- name: The default LANG
+  ansible.builtin.lineinfile:
+    path: "{{ base_locale_conf }}"
+    regexp: '^LANG='
+    line: "LANG={{ locale }}"
+    create: true
+    owner: root
+    group: root
+    mode: "0644"

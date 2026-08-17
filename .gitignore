@@ -16,3 +16,10 @@ provision-*.tar.gz
 .DS_Store
 *.swp
 *~
+
+# The linters test/lint.sh provisions for itself.
+.venv-lint/
+
+# Ansible byte-compiles callback_plugins/ the first time it loads it.
+__pycache__/
+*.pyc

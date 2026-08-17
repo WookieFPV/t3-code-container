@@ -1,0 +1,8 @@
+---
+galaxy_info:
+  author: t3-code-container
+  description: Fetch a vendor signing key and verify it against pinned fingerprints
+  license: MIT
+  min_ansible_version: "2.14"
+  standalone: true
+dependencies: []

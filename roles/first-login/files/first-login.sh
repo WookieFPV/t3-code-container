@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Everything that has to happen once, as the app user, after setup.sh.
+# Everything that has to happen once, as the app user, after provisioning.
 #
 # Two of these steps need a human at a browser (GitHub and t3 both use OAuth
 # device flows, and neither can be scripted without pasting a long-lived token
@@ -10,19 +10,43 @@
 # Safe to re-run: every step checks whether it is already done.
 set -uo pipefail
 
-step()  { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
-log()   { printf '    %s\n' "$*"; }
-ok()    { printf '    \033[32mok\033[0m %s\n' "$*"; }
-warn()  { printf '    \033[33mwarn\033[0m %s\n' "$*" >&2; }
-die()   { printf '\n\033[31merror\033[0m %s\n' "$*" >&2; exit 1; }
+# Keep a plain-text copy of the run: the terminal keeps its colours and stays a
+# real TTY (gh, t3 and claude read it directly, so it must not become a pipe),
+# while every step/ok/warn/error also lands in the file. Default is the app
+# user's state dir; FIRST_LOGIN_LOG relocates it, FIRST_LOGIN_LOG= disables.
+: "${FIRST_LOGIN_LOG:=$HOME/.local/state/first-login.log}"
+LOG_FILE=$FIRST_LOGIN_LOG
+if [[ -n $LOG_FILE ]]; then
+    mkdir -p "$(dirname "$LOG_FILE")"
+    printf '\n==== %s ====\n' "$(date '+%F %T %Z')" >> "$LOG_FILE"
+fi
+
+# emit CHANNEL LINE — print LINE (a printf-style \n/\033 string) to the
+# terminal and append a stripped, plain copy to the log.
+emit() {
+    local channel=$1 line=$2
+    if [[ $channel == err ]]; then
+        printf '%b\n' "$line" >&2
+    else
+        printf '%b\n' "$line"
+    fi
+    [[ -n $LOG_FILE ]] || return 0
+    printf '%b\n' "$line" | sed -r 's/\x1b\[[0-9;]*m//g' >> "$LOG_FILE"
+}
+
+step()  { emit out "\n\033[1;34m==> $*\033[0m"; }
+log()   { emit out "    $*"; }
+ok()    { emit out "    \033[32mok\033[0m $*"; }
+warn()  { emit err "    \033[33mwarn\033[0m $*"; }
+die()   { emit err "\n\033[31merror\033[0m $*"; exit 1; }
 
 # The app user owns this script, so its own owner is the account to switch to —
 # `id -un` here would just say root, which is the thing being refused.
 [[ $EUID -ne 0 ]] || die "run this as the app user, not root:
     machinectl shell $(stat -c '%U' "${BASH_SOURCE[0]}")@"
 
-command -v gh >/dev/null || die "gh is not on PATH — run setup.sh first"
-command -v t3 >/dev/null || die "t3 is not on PATH — run setup.sh first"
+command -v gh >/dev/null || die "gh is not on PATH — run provision.sh first"
+command -v t3 >/dev/null || die "t3 is not on PATH — run provision.sh first"
 
 # Both logins read a one-time code back from the terminal, so without a TTY this
 # would hang inside gh rather than fail here.
@@ -283,14 +307,14 @@ if [[ ${#stray[@]} -gt 0 ]]; then
     warn "unexpected t3 unit(s): ${stray[*]}
     The server is t3code.service and there must be exactly one — two of them
     share one ~/.t3 and one tunnel, which breaks the app while every local
-    check still reads healthy. Re-run './setup.sh --only t3-service' as root to reconcile, or:
+    check still reads healthy. Re-run './provision.sh --only t3-service' as root to reconcile, or:
         systemctl --user disable --now ${stray[*]}"
 fi
 
 # ------------------------------------------------------------------- service
 step "t3code.service"
 systemctl --user cat t3code.service >/dev/null 2>&1 ||
-    die "t3code.service is not installed — run './setup.sh --only t3-service' as root first."
+    die "t3code.service is not installed — run './provision.sh --only t3-service' as root first."
 
 # The environment link is provisioned by the server on its next start, so a
 # freshly authorized box needs one restart. Only then: a restart drops the

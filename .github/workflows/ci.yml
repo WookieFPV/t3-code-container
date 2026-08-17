@@ -9,25 +9,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: shellcheck
-        run: |
-          sudo apt-get update -qq && sudo apt-get install -y shellcheck
-          # --severity=warning: the info level is style advice (prefer find over
-          # ls, quote a variable that is always a number) and blocking a merge on
-          # it trains people to stop reading the output. Warnings and errors are
-          # the ones that have ever been real here.
-          shellcheck --severity=warning --external-sources --source-path=SCRIPTDIR \
-            setup.sh \
-            lib/*.sh \
-            profiles/*.sh \
-            roles/*/install.sh \
-            roles/*/files/*.sh \
-            test/*.sh \
-            pve/*.sh
-      - name: unit tests
-        run: ./test/unit.sh
 
-  # The package-manager layer, on every family we claim to map names for. No
+      - name: install the linters
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install ansible-core ansible-lint yamllint shellcheck-py
+
+      # One script, run here and by hand, so the two cannot drift. Everything
+      # it checks and why is in test/lint.sh; --no-bootstrap makes a missing
+      # tool a hard error here rather than silently building a virtualenv on a
+      # runner that just installed them.
+      - name: lint
+        run: ./test/lint.sh --no-bootstrap
+
+  # The package layer, on every family we claim to name packages for. No
   # systemd, so this is limited to the base role — which is exactly the role
   # that touches package names, locales and timezones.
   packages:
@@ -35,11 +30,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { image: "debian:12",          tier: 1 }
-          - { image: "debian:13",          tier: 1 }
-          - { image: "ubuntu:24.04",       tier: 1 }
-          - { image: "fedora:latest",      tier: 2 }
-          - { image: "archlinux:latest",   tier: 2 }
+          - {image: "debian:12", tier: 1}
+          - {image: "debian:13", tier: 1}
+          - {image: "ubuntu:24.04", tier: 1}
+          - {image: "fedora:latest", tier: 2}
+          - {image: "archlinux:latest", tier: 2}
     runs-on: ubuntu-latest
     # Tier 2 is best effort by policy, so it reports without failing the build.
     continue-on-error: ${{ matrix.tier == 2 }}
@@ -54,7 +49,15 @@ jobs:
           elif command -v dnf     >/dev/null; then dnf install -y git
           elif command -v pacman  >/dev/null; then pacman -Sy --noconfirm git
           fi
+
       - uses: actions/checkout@v4
+
+      # provision.sh installs ansible-core itself on a real container. Doing it
+      # as its own step here keeps a package-manager failure distinguishable
+      # from a playbook failure in the log.
+      - name: install ansible
+        run: ./provision.sh --list >/dev/null || true
+
       - name: install base, twice
         run: ./test/install-check.sh --only base
 
@@ -68,16 +71,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: build a systemd image
         run: |
           cat >Dockerfile.ci <<EOF
           FROM ${{ matrix.image }}
           ENV DEBIAN_FRONTEND=noninteractive
+          # purge sudo: the Ubuntu images ship it and the Debian ones do not,
+          # and a real LXC container is the Debian case. Ansible's default
+          # become_method is sudo, so leaving it installed on half the matrix
+          # would let the privilege drop to the app user break on the hardware
+          # this repo exists for while CI stayed green. It did, once.
           RUN apt-get update && apt-get install -y systemd systemd-sysv dbus git ca-certificates \
+              && apt-get purge -y sudo \
               && rm -rf /var/lib/apt/lists/*
           CMD ["/sbin/init"]
           EOF
           docker build -f Dockerfile.ci -t provision-ci .
+
       - name: boot it
         run: |
           docker run -d --name ci --privileged --cgroupns=host \
@@ -94,8 +105,10 @@ jobs:
           echo "system state: ${state:-unknown}"
           case ${state:-} in running|degraded) ;; *) docker logs ci; exit 1 ;; esac
           docker exec ci systemctl --version | head -1
+
       - name: install the minimal profile, twice
         run: docker exec ci ./test/install-check.sh --profile minimal
+
       - name: the app user has a working systemd session
         run: |
           docker exec ci bash -c '
@@ -106,6 +119,32 @@ jobs:
             runuser -u devuser -- env XDG_RUNTIME_DIR=/run/user/$(id -u devuser) \
               systemctl --user is-system-running --wait
           '
+
+      # The minimal profile is base + user, and neither role ever runs anything
+      # as the app user — so nothing above this exercises the privilege drop
+      # that the node, bun, claude, t3 and t3-service roles are built on. Do it
+      # explicitly, with the same config a real run uses, on an image with no
+      # sudo. Without this the whole class is untested.
+      - name: becoming the app user works without sudo
+        run: |
+          docker exec ci bash -c '
+            set -eux
+            ! command -v sudo
+            export ANSIBLE_CONFIG=/repo/ansible.cfg
+            ansible -i inventory/local.yml localhost \
+              --become --become-user devuser \
+              -m command -a "id -un" | tee /tmp/become
+            grep -q devuser /tmp/become
+          '
+
+      # --only is what somebody reaches for to repair one step on a box that is
+      # already provisioned, and it is the reason the playbooks carry per-role
+      # tags instead of declaring role dependencies. It has its own failure mode
+      # — a tag that matches nothing runs an empty play and exits 0 — so assert
+      # that a single-role run actually does the role.
+      - name: a single-role run still converges
+        run: docker exec ci ./test/install-check.sh --only user
+
       - name: teardown
         if: always()
         run: docker rm -f ci || true

@@ -1,0 +1,40 @@
+---
+# Pin GitHub's SSH host keys system-wide.
+#
+# The fetch-verify-merge is one shipped script rather than a sequence of tasks:
+# it is a single transaction on one file, the awk that preserves other forges'
+# entries does not become clearer split across task boundaries, and the day it
+# matters — a host key rotation — you want to be able to run it directly. See
+# the header of files/github-host-keys.sh.
+
+- name: Preconditions
+  ansible.builtin.include_role:
+    name: preflight
+  vars:
+    preflight_for: github-ssh
+    preflight_commands: [curl, jq, ssh-keygen, ssh-keyscan]
+
+- name: The host-key script
+  ansible.builtin.copy:
+    src: github-host-keys.sh
+    dest: /usr/local/lib/github-host-keys.sh
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Verify and pin GitHub's SSH host keys
+  ansible.builtin.command:
+    argv: >-
+      {{ ['/usr/local/lib/github-host-keys.sh', github_ssh_known_hosts]
+         + github_ssh_fingerprints }}
+  register: github_ssh_result
+  # The script writes only when the merged content differs, and says which it
+  # did on its last line — so this reports honestly rather than "changed" on
+  # every run against an API that returns the same three keys every time.
+  # Sliced rather than `| last`, which raises on the empty stdout of a failed
+  # run and replaces the script's error with one about the conditional.
+  changed_when: github_ssh_result.stdout_lines[-1:] == ['changed']
+
+- name: Say what happened
+  ansible.builtin.debug:
+    msg: "{{ github_ssh_result.stdout_lines | first }}"

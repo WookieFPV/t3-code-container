@@ -1,0 +1,24 @@
+---
+# Install the guided one-time account setup on the app user's PATH.
+#
+# Kept as a script the human runs rather than something the playbook calls: it
+# needs a TTY and a browser on some other device, so it cannot run unattended,
+# and it belongs to the app user rather than to root. Nothing about it wants to
+# be config management — it is a conversation.
+
+- name: Every component of the npm prefix belongs to the app user
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: "0755"
+  loop: "{{ npm_prefix_dirs }}"
+
+- name: The first-login helper
+  ansible.builtin.copy:
+    src: first-login.sh
+    dest: "{{ npm_prefix }}/bin/first-login"
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: "0755"

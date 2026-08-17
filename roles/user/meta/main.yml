@@ -1,0 +1,8 @@
+---
+galaxy_info:
+  author: t3-code-container
+  description: Unprivileged app user, linger, home layout and shell environment
+  license: MIT
+  min_ansible_version: "2.14"
+  standalone: true
+dependencies: []

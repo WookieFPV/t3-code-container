@@ -1,0 +1,29 @@
+---
+# Fedora ships current Node in its own repositories, versioned per major. Prefer
+# the exact major, fall back to the unversioned package.
+
+- name: Is there a versioned nodejs package?
+  ansible.builtin.command: "dnf -q list --available nodejs{{ node_major }}"
+  register: node_versioned
+  changed_when: false
+  failed_when: false
+
+- name: Install the versioned package
+  ansible.builtin.package:
+    name: "nodejs{{ node_major }}"
+    state: present
+  when: node_versioned.rc == 0
+
+- name: Warn and install the distribution default
+  when: node_versioned.rc != 0
+  block:
+    - name: Say so
+      ansible.builtin.debug:
+        msg: >-
+          WARNING: no nodejs{{ node_major }} package — installing the
+          distribution default.
+
+    - name: Install it
+      ansible.builtin.package:
+        name: [nodejs, npm]
+        state: present

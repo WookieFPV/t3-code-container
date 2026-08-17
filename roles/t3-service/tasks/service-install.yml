@@ -1,0 +1,104 @@
+---
+# Installs (or repairs) t3code.service for the t3 version currently on PATH:
+# writes the unit, builds the pinned runtime, enables lingering, starts it.
+# Idempotent — it returns early when the installed unit already matches this
+# version, so re-running costs nothing.
+#
+# The pinned runtime is a full `npm install` of t3 including a node-gyp build of
+# node-pty, so a first run here takes a few minutes.
+
+- name: Install t3's background service
+  ansible.builtin.command: t3 service install
+  become: true
+  become_user: "{{ app_user }}"
+  environment: "{{ app_user_env }}"
+  register: t3_service_install
+  changed_when: false
+  failed_when: false
+
+- name: Explain a failed service install
+  ansible.builtin.assert:
+    that: t3_service_install.rc == 0
+    fail_msg: >-
+      't3 service install' failed. Check the log it writes:
+      {{ t3_home }}/userdata/logs/boot-service.log
+      A pinned-runtime build needs network, a compiler and python3 (base role),
+      and the allow-scripts line in {{ app_home }}/.npmrc (node role).
+      If the log names the 'enabling lingering' step, the app user's
+      'loginctl' shim either was not on t3's PATH or found no linger marker
+      to confirm. Check both as the app user:
+          ls -l /var/lib/systemd/linger/{{ app_user }}   # the user role creates this
+          command -v loginctl                            # {{ npm_prefix }}/bin/loginctl
+      A missing marker is repaired with './provision.sh --only user' as root.
+      ---
+      {{ t3_service_install.stdout | default('') }}
+      {{ t3_service_install.stderr | default('') }}
+    quiet: true
+
+# The check that catches what `t3 service install` cannot: a runtime that staged
+# perfectly and dies on startup because node-pty was never built. See the header
+# of files/check-pinned-runtime.sh.
+- name: The pinned-runtime check
+  ansible.builtin.copy:
+    src: check-pinned-runtime.sh
+    dest: /usr/local/lib/check-pinned-runtime.sh
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: The pinned runtime must be able to load node-pty
+  ansible.builtin.command:
+    argv: [/usr/local/lib/check-pinned-runtime.sh, "{{ t3_home }}"]
+  become: true
+  become_user: "{{ app_user }}"
+  environment: "{{ app_user_env }}"
+  changed_when: false
+
+# node-pty is the failure the check above catches, but not the only one that
+# leaves `t3 service install` exiting 0 over a server that never came up — a
+# failed migration, a bound port, an unreadable database all surface as five
+# restarts inside StartLimitIntervalSec=300 and a unit in failed. Wait for the
+# one local fact that separates a running server from a started unit: a live
+# pid in server-runtime.json. See the header of files/wait-for-server.sh.
+- name: The server-listening check
+  ansible.builtin.copy:
+    src: wait-for-server.sh
+    dest: /usr/local/lib/wait-for-server.sh
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: The server behind t3code.service must report itself listening
+  ansible.builtin.command:
+    argv: [/usr/local/lib/wait-for-server.sh, "{{ t3_home }}"]
+  become: true
+  become_user: "{{ app_user }}"
+  environment: "{{ app_user_env }}"
+  changed_when: false
+
+- name: Service status
+  ansible.builtin.command: t3 service status
+  become: true
+  become_user: "{{ app_user }}"
+  environment: "{{ app_user_env }}"
+  register: t3_service_status
+  changed_when: false
+  failed_when: false
+
+# noqa command-instead-of-module: this is a status query for the human reading
+# the output, and the systemd module reports unit state rather than when a timer
+# will next fire.
+- name: The nightly timer's next run  # noqa command-instead-of-module
+  ansible.builtin.command: systemctl --user list-timers t3-update.timer --no-pager
+  become: true
+  become_user: "{{ app_user }}"
+  environment: "{{ app_user_env }}"
+  register: t3_service_timers
+  changed_when: false
+  failed_when: false
+
+- name: Say where things stand
+  ansible.builtin.debug:
+    msg: |-
+      {{ t3_service_status.stdout | default('') }}
+      {{ t3_service_timers.stdout | default('') }}

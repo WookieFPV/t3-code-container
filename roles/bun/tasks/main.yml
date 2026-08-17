@@ -1,0 +1,74 @@
+---
+# Bun, via the official installer.
+#
+# No distribution packages it, so this is the vendor's install script into
+# ~/.bun. Distro-independent as a result — the only requirements are curl and
+# unzip, which the base role installs.
+
+- name: Preconditions
+  ansible.builtin.include_role:
+    name: preflight
+  vars:
+    preflight_for: bun
+    preflight_commands: [curl, unzip]
+
+- name: Is bun already installed?
+  ansible.builtin.stat:
+    path: "{{ app_home }}/.bun/bin/bun"
+  register: bun_bin
+
+- name: Install bun
+  ansible.builtin.shell:
+    cmd: set -o pipefail && curl -fsSL https://bun.sh/install | bash
+    executable: /bin/bash
+    creates: "{{ app_home }}/.bun/bin/bun"
+  become: true
+  become_user: "{{ app_user }}"
+  environment: "{{ app_user_env }}"
+  when: not bun_bin.stat.exists
+
+# `bun upgrade` on an existing install, and deliberately not reported as a
+# change. The bash version did the same: keeping a vendor-managed tool current
+# is not part of the state this playbook converges on, and counting it as a
+# change would mean the idempotency test could never pass on a box whose vendor
+# shipped a release that morning.
+- name: Keep bun current
+  ansible.builtin.command: bun upgrade
+  become: true
+  become_user: "{{ app_user }}"
+  environment: "{{ app_user_env }}"
+  when: bun_bin.stat.exists
+  register: bun_upgrade
+  changed_when: false
+  failed_when: false
+
+- name: Warn when the upgrade failed
+  ansible.builtin.debug:
+    msg: "WARNING: bun upgrade failed; keeping the existing version."
+  when: bun_bin.stat.exists and bun_upgrade.rc != 0
+
+- name: Which bun is installed?
+  ansible.builtin.command: bun --version
+  become: true
+  become_user: "{{ app_user }}"
+  environment: "{{ app_user_env }}"
+  register: bun_version
+  changed_when: false
+
+- name: Say so
+  ansible.builtin.debug:
+    msg: "bun {{ bun_version.stdout | trim }}"
+
+# The installer writes these to .bashrc itself, but only when it can see one it
+# recognises; setting them here means a re-provision repairs a hand-edited file.
+- name: Bun on the app user's PATH
+  ansible.builtin.lineinfile:
+    path: "{{ app_home }}/.bashrc"
+    line: "{{ item }}"
+    create: true
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: "0644"
+  loop:
+    - 'export BUN_INSTALL="$HOME/.bun"'
+    - 'export PATH="$BUN_INSTALL/bin:$PATH"'

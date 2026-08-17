@@ -1,0 +1,53 @@
+---
+# Package names for the Debian family.
+#
+# The bash version kept one canonical (Debian) list and translated it per family
+# with a `pkg_map` function. A vars file per family is the same information with
+# the indirection removed: to see what Fedora installs you read the Fedora file,
+# rather than running a mapping in your head. The cost is that adding a package
+# means touching three files, which a comment in each is enough to catch.
+
+base_packages:
+  # setfacl. Ansible needs it to become an unprivileged user: the module it is
+  # about to run is written to a temp file owned by root, and handing that file
+  # to the app user is done with an ACL. Without it the task fails with "Failed
+  # to set permissions on the temporary files Ansible needs to create when
+  # becoming an unprivileged user" — every task in the node, bun, claude, t3 and
+  # t3-service roles, none of which CI reaches.
+  - acl
+  - apt-transport-https
+  - bash-completion
+  - bind9-dnsutils
+  # build-essential and python3 are required at install time, not optional:
+  # node-pty (a t3 dependency) ships prebuilds for macOS and Windows only, so on
+  # Linux npm falls back to `node-gyp rebuild`, and node-gyp refuses to run
+  # without a python3 interpreter. Kept in the base list rather than the node
+  # role because a compiler is what any dev container is for.
+  - build-essential
+  - ca-certificates
+  - cron
+  - curl
+  # dbus + the systemd PAM module: logind cannot open a user session without
+  # them, so the user role's wait for /run/user/UID would time out.
+  - dbus
+  - git
+  - gnupg
+  - htop
+  - jq
+  - libpam-systemd
+  - locales
+  - lsof
+  - nano
+  - openssh-client
+  - python3
+  - systemd-container
+  - unzip
+  - vim
+  - wget
+
+# Debian generates locales from a list; RedHat ships them prebuilt in a langpack.
+base_locale_from_locale_gen: true
+
+# Where the default LANG lives on this family.
+# Debian's convention, and what update-locale writes; pam_env reads it at login.
+base_locale_conf: /etc/default/locale

@@ -1,0 +1,105 @@
+---
+# Seeded per key, never overwritten.
+#
+# /model and /effort inside a session write back to this same file, so a value
+# already present is a choice somebody made in the app and re-running the
+# playbook must not undo it — provisioning sets a starting point, it does not
+# own the file. Delete the key there (or the whole file) and the next run puts
+# the profile default back.
+#
+# User scope rather than a project .claude/: this is about the machine's
+# starting point, and it has to apply in a repo cloned an hour from now.
+
+- name: Nothing to seed
+  ansible.builtin.debug:
+    msg: >-
+      no claude_model / claude_effort_level set — using the account default
+  when: not (claude_model | length > 0 or claude_effort_level | length > 0)
+
+- name: Seed the defaults
+  when: claude_model | length > 0 or claude_effort_level | length > 0
+  block:
+    - name: The app user's .claude
+      ansible.builtin.file:
+        path: "{{ app_home }}/.claude"
+        state: directory
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        mode: "0755"
+
+    - name: Is there a settings file already?
+      ansible.builtin.stat:
+        path: "{{ claude_settings_file }}"
+      register: claude_settings
+
+    # Anything could have written this file; a hand-edit that lost a comma must
+    # not take the provisioning run down with it, and merging into it blind
+    # would replace it with our two keys alone. `type == "object"` covers both
+    # failure shapes in one test: jq exits 5 on a file it cannot parse, and -e
+    # exits 1 when the filter says false, so a valid JSON array or bare string
+    # lands here too.
+    - name: Is it a JSON object?
+      ansible.builtin.command:
+        argv: [jq, -e, 'type == "object"', "{{ claude_settings_file }}"]
+      register: claude_settings_valid
+      changed_when: false
+      failed_when: false
+      when: claude_settings.stat.exists and claude_settings.stat.size > 0
+
+    - name: Leave a file we cannot parse alone
+      ansible.builtin.debug:
+        msg: >-
+          WARNING: {{ claude_settings_file }} is not a JSON object — leaving it
+          alone. Fix or delete it, then re-run
+          './provision.sh --only claude'.
+      when: claude_settings_valid.rc | default(0) != 0
+
+    - name: Merge in what is missing
+      when: claude_settings_valid.rc | default(0) == 0
+      block:
+        - name: Read the current settings
+          ansible.builtin.slurp:
+            src: "{{ claude_settings_file }}"
+          register: claude_settings_raw
+          when: claude_settings.stat.exists and claude_settings.stat.size > 0
+
+        - name: Work out which keys are absent
+          ansible.builtin.set_fact:
+            claude_settings_current: "{{ claude_current }}"
+            claude_settings_missing: >-
+              {{ {'model': claude_model, 'effortLevel': claude_effort_level}
+                 | dict2items
+                 | rejectattr('value', 'eq', '')
+                 | rejectattr('key', 'in', claude_current_set_keys)
+                 | items2dict }}
+          vars:
+            claude_current: >-
+              {{ (claude_settings_raw.content | default('') | b64decode | from_json)
+                 if (claude_settings.stat.exists and claude_settings.stat.size > 0)
+                 else {} }}
+            # A key explicitly cleared in the app comes back as null, which is
+            # the same case as absent: both mean "nobody has chosen a value".
+            claude_current_set_keys: >-
+              {{ claude_current | dict2items
+                 | rejectattr('value', 'none') | map(attribute='key') | list }}
+
+        - name: Report what is already set
+          ansible.builtin.debug:
+            msg: >-
+              {{ item }} already set to
+              {{ claude_settings_current[item] }} — left alone
+          loop: [model, effortLevel]
+          when:
+            - item not in claude_settings_missing
+            - claude_settings_current[item] | default(none) is not none
+
+        - name: Write the seeded settings
+          ansible.builtin.copy:
+            content: >-
+              {{ (claude_settings_current | combine(claude_settings_missing)
+                  | to_nice_json) ~ '\n' }}
+            dest: "{{ claude_settings_file }}"
+            owner: "{{ app_user }}"
+            group: "{{ app_user }}"
+            mode: "0644"
+          when: claude_settings_missing | length > 0

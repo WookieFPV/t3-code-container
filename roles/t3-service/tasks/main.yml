@@ -1,0 +1,44 @@
+---
+# t3code.service plus the nightly update timer.
+#
+# The server runs under t3's own systemd user unit, installed by
+# `t3 service install`. This role installs the nightly update timer and makes
+# sure exactly one server unit exists.
+#
+# Why t3's unit and not one of ours: it points systemd at a per-version pinned
+# runtime under ~/.t3/runtime/versions/<v> (staging directory, sentinel, atomic
+# rename) rather than at whatever state a global npm install happens to be in,
+# and it carries the update protocol the app drives — snapshot, trial, roll back
+# a bad migration. It also tracks t3's own changes instead of drifting. See
+# docs/design.md.
+#
+# These are user units (~/.config/systemd/user), not system units, which is why
+# they run unprivileged and are managed with `systemctl --user`.
+
+- name: Preconditions
+  ansible.builtin.include_role:
+    name: preflight
+  vars:
+    preflight_for: t3-service
+    preflight_commands: [node]
+    preflight_systemd: true
+
+- name: The app user's systemd unit directory
+  ansible.builtin.file:
+    path: "{{ t3_service_unit_dir }}"
+    state: directory
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: "0755"
+
+- name: Remove a legacy hand-rolled server unit
+  ansible.builtin.import_tasks: legacy-unit.yml
+
+- name: Linger, deterministically
+  ansible.builtin.import_tasks: linger.yml
+
+- name: The nightly update timer
+  ansible.builtin.import_tasks: nightly-update.yml
+
+- name: The t3 service itself
+  ansible.builtin.import_tasks: service-install.yml

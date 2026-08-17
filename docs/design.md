@@ -22,103 +22,212 @@ knows Proxmox exists. It creates the container, waits for DHCP, pushes the
 working tree in and runs the guest layer. Replacing it with Terraform, an Incus
 command or a cloud VPS changes nothing else.
 
-**The guest layer** is `setup.sh` and everything it runs. It requires root and
-systemd, and nothing else. That is what makes this useful to somebody who has
-never touched Proxmox.
+**The guest layer** is `provision.sh` and the playbooks it runs. It requires
+root and systemd, and nothing else. That is what makes this useful to somebody
+who has never touched Proxmox.
 
 ```
-setup.sh                 parse arguments, pick a profile, resolve the plan
-  lib/common.sh          sourced by setup.sh and by every role
-    lib/log.sh           header/log/ok/warn/skip/die
-    lib/os.sh            distribution detection and support tiers
-    lib/pkg.sh           package manager abstraction and name mapping
-    lib/sys.sh           accounts, linger, timezone, locale
-    lib/fs.sh            install_file, ensure_line, user_dir
-    lib/keys.sh          pinned signing-key verification
-    lib/roles.sh         role discovery, metadata, dependency ordering
-  profiles/<name>.sh     a role list plus settings — the user-facing surface
-  roles/<name>/install.sh  one installable thing
+provision.sh             install ansible-core, pick a profile, run the playbook
+  ansible.cfg            ansible-core only, no collections
+  callback_plugins/      the stdout callback: what a run prints, and what it
+                         leaves out
+  inventory/local.yml    this machine, connection: local
+  inventory/group_vars/  settings shared by every profile — must live beside the
+                         inventory, not at the repo root, or Ansible ignores it
+  playbooks/<name>.yml   a role list plus settings — the user-facing surface
+    tasks/preflight.yml  refuse Alpine, warn on tier 2, read the app user's uid
+    roles/<name>/        one installable thing
+    tasks/done.yml       what is left for a human to do
 ```
 
-Each role runs as a **separate bash process**. A subshell would be cheaper, but
-a separate process is what makes a role unable to leak state into the next one,
-so `--only claude` behaves exactly as the `claude` step of a full run does.
-Configuration reaches roles by having each of them source `lib/common.sh`,
-which re-reads the same profile — not by exporting a pile of variables.
+### Why Ansible, and where it stops helping
 
-### Why roles replaced numbered modules
+This started as a tree of bash: a `setup.sh` that parsed arguments, a `lib/`
+that abstracted package managers and file writes, and a role runner that read
+`# requires:` headers and resolved a dependency graph. It worked, and it was
+about fourteen hundred lines of code that existed only so the interesting parts
+could be written.
 
-The first version ran `modules/*.sh` in filename order: `05-user.sh`,
-`10-apt.sh`, `20-node.sh`. That encodes ordering in the filename, which works
-exactly until two people add a module — everyone picks 25, and inserting a step
-means renumbering its neighbours. It also made every ordering constraint
-implicit: `05-user.sh` had to install `dbus` and `libpam-systemd` itself,
-with a comment explaining that it ran *before* the package module, because the
-dependency was real but pointed the wrong way.
+Ansible removes that layer wholesale. Dependency ordering, "write this file only
+if it differs", "install this package unless it is already there", per-task
+change reporting, `--check`, `--diff`, `--start-at-task` — all of it is now
+somebody else's code, tested by somebody else. Roughly five hundred lines went
+away and are not missed.
 
-Roles declare what they need and the order is derived, so `base` owns every
-system package and `user` simply requires it.
+It is worth being precise about what it did **not** fix, because that is most of
+what makes this repo hard:
+
+- npm 12's `allow-scripts` semantics, and the fact that the allowlist has to
+  reach `~/.npmrc` rather than a command line
+- node-pty falling back to `node-gyp rebuild` on Linux, and failing at runtime
+  rather than at install time
+- logind asking polkit whether a user may set their own linger
+- `t3 service install` exiting 0 on a runtime that cannot boot
+- two servers against one `~/.t3`
+
+None of that becomes simpler in YAML. Written as tasks it becomes *harder* to
+debug, because a `shell:` task inside a role is something you can only run by
+running the playbook. So those pieces stay as scripts the roles ship and call —
+see [Scripts, not tasks](#scripts-not-tasks).
+
+### Scripts, not tasks
+
+Four pieces of logic are shipped as executable scripts rather than expressed as
+Ansible tasks:
+
+| Script | What it decides |
+| --- | --- |
+| `roles/keyring/files/verify-keyring.sh` | Is every key in this file one we pinned? |
+| `roles/github-ssh/files/github-host-keys.sh` | Fetch, verify and merge GitHub's host keys |
+| `roles/t3/files/check-npmrc-allow-scripts.sh` | Does `~/.npmrc` really allow t3's native install scripts? |
+| `roles/t3-service/files/check-pinned-runtime.sh` | Can the runtime systemd will boot load node-pty? |
+
+The rule for what belongs here: **if the day you read it is a day something is
+broken, it should be runnable on its own.** A key rotation, an unreachable
+container, a crash-looping server — in each case you want to run the check
+directly, with your own arguments, and read its output. Every one of them takes
+its inputs as arguments and prints a real message.
+
+The payoff is that they are unit-testable without root, without a container and
+without Ansible. `test/unit.sh` covers all four in about a second, which is more
+than the old library layer ever managed for the same logic.
+
+The rule for what does *not* belong here: anything Ansible already reports on
+correctly. Installing a package, writing a unit file, creating a directory —
+those are tasks, and turning them into a script would throw away change
+reporting and `--check` for nothing.
+
+### What a run prints
+
+A full provisioning run is around a hundred tasks, and on a box that is already
+provisioned all but a few of them end `ok` — they are conditions being checked,
+which is the point of writing them as tasks, but a screen of `ok:` is not
+something anyone reads. So the output is filtered down to what actually
+happened:
+
+- **Tasks that changed something, and tasks that failed**, exactly as Ansible
+  prints them.
+- **The debug tasks**, which are the run talking to you on purpose: what
+  distribution this is and whether it is tested, and the closing note about the
+  OAuth device codes only a human can finish.
+- **The play recap**, whose `changed=0` on a second run is the idempotency
+  claim this repo makes — and is what `test/install-check.sh` asserts on.
+
+Everything else says nothing. That is `callback_plugins/concise.py`, forty
+lines subclassing the in-core `default` callback, plus `display_ok_hosts =
+False` in `ansible.cfg`; `provision.sh -- -v` turns the full task-by-task output
+back on. The same principle applies to the two scripts: the package manager
+installing ansible-core and `pct create` unpacking an image are buffered and
+printed only if they exit non-zero (`quietly()` in both scripts).
 
 ## Writing a role
 
-A role is one directory with one executable `install.sh`, and anything it ships
-in `files/` beside it.
+A role is one directory under `roles/`, with `tasks/main.yml` and anything it
+ships in `files/` beside it.
 
-```bash
-#!/usr/bin/env bash
-# requires: base user
-# description: Whatever this installs, one line, lower case
-set -euo pipefail
-source "$REPO_DIR/lib/common.sh"
+```yaml
+---
+- name: Preconditions
+  ansible.builtin.include_role:
+    name: preflight
+  vars:
+    preflight_for: my-role
+    preflight_commands: [curl]
 
-: "${MY_SETTING:=default}"    # `:=`, so a profile or the environment can win
+- name: Install the thing
+  ansible.builtin.package:
+    name: [ripgrep, fd-find]
+    state: present
 
-pkg_install ripgrep fd-find
-install_file "$ROLE_DIR/files/thing.conf" /etc/thing.conf 0644
+- name: Configure it
+  ansible.builtin.copy:
+    src: thing.conf
+    dest: /etc/thing.conf
+    owner: root
+    group: root
+    mode: "0644"
 ```
 
-Metadata lives in the comment header, so listing roles never executes them.
-Parsing stops at the first line that is neither a comment nor blank, which is
-why a `# description:` inside the body cannot change the plan.
-
-Two variables are provided: `REPO_DIR` (the repo root) and `ROLE_DIR` (this
-role's directory — use it for `files/`, never a relative path).
+Add a `meta/main.yml` with a one-line description — that is what
+`./provision.sh --list` prints — and then add the role to a profile playbook
+with its own tag.
 
 The rules that matter:
 
-- **Converge, do not just install.** Every run must reach the same state, and a
-  second run must write nothing. Use `pkg_install`, `install_file` and
-  `ensure_line`, which all no-op when there is nothing to do. `test/install-check.sh`
-  asserts this and CI runs it.
-- **Never call `apt-get`, `dpkg` or `dnf` directly.** Use `pkg_install`, and add
-  a mapping to `pkg_map` if the package is spelled differently somewhere.
-- **Use `user_dir` for anything under the app user's home**, never
-  `install -d -o`. See [the ownership note](#every-directory-under-the-app-users-home-is-created-with-user_dir).
-- **Pin third-party signing keys** with `fetch_keyring`. Fail closed.
-- **Branch on `OS_FAMILY`, never on `OS_ID`.**
-- **Do not stream a command that is verbose on success.** Package managers and
-  installers are loud about things that are not errors; wrap them in
-  `run_quiet "what failed" <cmd> ...` (see `lib/log.sh`). Success prints
-  nothing, failure replays the captured log and dies, and the role prints its
-  own `log`/`ok` summary line either way.
+- **Declare preconditions with the `preflight` role, not with
+  `meta/main.yml` dependencies.** See [--only and tags](#only-and-tags).
+- **Report changes honestly.** Every `command:` and `shell:` task needs an
+  explicit `changed_when`. If a task runs a vendor's own updater, `false` is the
+  right answer and deserves a comment saying why.
+- **Name packages per family in `vars/<os_family>.yml`.** `ansible_os_family` is
+  `Debian`, `RedHat` or `Archlinux`; branch on that, never on the distribution.
+- **Pin third-party signing keys** with the `keyring` role. Fail closed.
+- **Ensure `npm_prefix_dirs` yourself** if the role installs into the app user's
+  npm prefix. Every component, parents included — see
+  [the ownership note](#every-component-of-the-app-users-npm-prefix-is-owned-explicitly).
+  Do not assume the `user` role has been re-run since.
+- **Run as the app user with `become_user` plus `environment: "{{ app_user_env }}"`,**
+  never one without the other. That variable is what carries the PATH, the
+  `XDG_RUNTIME_DIR` that makes `systemctl --user` work, and the `npm_config_*`
+  overrides described in `inventory/group_vars/all.yml`.
 
-Then add it to a profile, and to `test/unit.sh` if it has logic worth asserting.
+Then add it to `test/unit.sh` if it ships a script with logic worth asserting.
+
+### `--only` and tags
+
+`--only claude` maps to `ansible-playbook --tags claude`, and every role in
+every profile carries its own name as a tag. Nothing declares
+`meta/main.yml` dependencies, on purpose.
+
+Ansible inserts a role dependency into the play and tags it with its
+*dependant's* tags. So if `claude` declared `dependencies: [base, user]`, then
+`--tags claude` would run `base` and `user` too — which is precisely what
+`--only` exists not to do. It is for repairing one step on a box that is already
+provisioned, and re-running the package layer and the account layer every time
+would make it useless.
+
+The ordering that dependencies would have encoded lives in the profile playbook
+instead, which lists roles in the order they must run. With ten roles that is
+one readable list rather than a graph to resolve, and inserting a step is one
+line. What is lost — a role stating what it needs — comes back as the
+`preflight` role, which fails with the command to run rather than silently
+running it.
 
 ## Writing a profile
 
-A profile is a role list and some settings. It is the whole user-facing surface:
-to build a different kind of box, copy one and change the list.
+A profile is a playbook. It is the whole user-facing surface: to build a
+different kind of box, copy one and change the role list.
 
-```bash
-PROFILE_DESCRIPTION="What this box is for"
-ROLES=(base user node)
-: "${NODE_MAJOR:=22}"
+```yaml
+---
+# description: What this box is for
+- name: What this box is for
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    node_major: 22
+
+  pre_tasks:
+    - ansible.builtin.import_tasks: ../tasks/preflight.yml
+
+  roles:
+    - {role: base, tags: [base]}
+    - {role: user, tags: [user]}
+    - {role: node, tags: [node]}
+
+  post_tasks:
+    - ansible.builtin.import_tasks: ../tasks/done.yml
 ```
 
-Settings are assigned with `: "${VAR:=...}"`, never `VAR=...`, so precedence
-stays: **defaults in `lib/common.sh` < profile < environment**. Assigning
-directly would silently beat `NODE_MAJOR=22 ./setup.sh`, which is the one thing
-someone reading the usage text expects to work.
+The `# description:` comment on the second line is what `--list` shows; nothing
+else parses the file.
+
+Settings go under `vars:`, which sits between `inventory/group_vars/all.yml` and `-e` in
+Ansible's precedence order. That is the same three-level order the bash version
+maintained by hand with `: "${VAR:=...}"`, and here it needs no discipline to
+get right.
 
 ## Distribution support
 
@@ -137,15 +246,52 @@ port.
 Tier 2 prints a warning naming itself. Claiming a distribution nothing tests is
 worse than not claiming it.
 
+Two Arch-specific things worth knowing, both of which cost a CI run.
+
+`ansible-core` ships the `apt` and `dnf` modules but not `pacman`, which lives
+in `community.general`. So `provision.sh` installs `ansible-core` everywhere
+except Arch, where it installs the bundled `ansible` package instead. Adding a
+collection dependency for tier 1 would mean a galaxy install on every fresh
+container; paying it only where it is needed keeps the common path to one
+distribution package.
+
+That dependency is deliberately confined to *runtime on Arch*. No task in any
+role names a collection module, and it is worth knowing why: **Ansible resolves
+every module in a task list when it loads the play, including tasks whose `when`
+is false.** A single `community.general.*` task in a role every profile runs
+therefore makes that collection a hard dependency on Debian, Ubuntu and Fedora
+as well — which is how Fedora's CI job broke on an Arch-only task. When a role
+needs something only a collection expresses, it uses `ansible.builtin.command`
+and a `changed_when` instead.
+
+And **Arch does not support partial upgrades.** Refreshing the index without
+also upgrading (`pacman -Sy`) leaves packages built against library versions
+that are no longer installed, and asks the mirror for files it has already
+replaced — which surfaces as a 404 on some unrelated dependency, not as
+anything that names the real cause. `ansible.builtin.package` runs a plain
+`pacman -S`, so the `base` role runs `pacman -Syu` first. That is the Arch
+counterpart of the apt cache refresh, not an extra step: on Arch the two cannot
+be separated.
+
 ## Design decisions
 
 ### Non-root by design
 
 The app user runs with **no sudo**. Everything system-level is done by
-`setup.sh` as root, so an agent running as this user cannot damage the OS
+the playbook as root, so an agent running as this user cannot damage the OS
 install; the blast radius is one home directory, and every repo there has a
 remote. Nothing needs root anyway: user systemd units, outbound-only
 networking, ports above 1024, and `npm i -g` into `~/.local`.
+
+There is no sudo on the box at all, which is also why `ansible.cfg` sets
+`become_method = su`. Ansible's default is sudo, and a fresh Debian or Ubuntu
+LXC does not ship it, so the default fails at the first task that runs as the
+app user — an error (`Premature end of stream waiting for become success`) that
+names neither sudo nor the task's real problem. `su` is part of util-linux and
+therefore always present, and root becoming a named user needs no password.
+`tasks/preflight.yml` checks for it before any role runs, and the base role
+installs `acl`, which is what Ansible uses to hand a module file to an
+unprivileged user.
 
 ### Third-party signing keys are pinned
 
@@ -173,16 +319,28 @@ make trusting the API safe. Without this, the first `git clone` over SSH asks
 *"Are you sure you want to continue connecting?"*, and nobody has ever verified
 that fingerprint by hand.
 
-### Every directory under the app user's home is created with `user_dir`
+### Every component of the app user's npm prefix is owned explicitly
 
-Not with `install -d -o`: that applies the ownership to the **last** component
-only, so `install -d -o devuser ~/.local/bin` leaves `~/.local` itself
-`root:root 0755`. Nothing notices while programs only write *inside* the leaf —
-npm never creates anything directly in `~/.local` — until one tries to add a
-sibling. Claude Code's installer does, and died with
-`EACCES: permission denied, mkdir '/home/devuser/.local/share'`. `user_dir`
-owns every component of the path, and chowns existing ones, so re-running
-`setup.sh` repairs a container provisioned before this was fixed.
+`npm_prefix_dirs` in `inventory/group_vars/all.yml` lists `~/.local` itself, not just
+`~/.local/bin`, `lib` and `share`. That looks redundant and is not.
+
+The bash version created these with `install -d -o devuser ~/.local/bin`, which
+applies the ownership to the **last** component only and leaves the `~/.local`
+it created on the way `root:root 0755`. Nothing notices while programs only
+write *inside* the leaf — npm never creates anything directly in `~/.local` —
+until one tries to add a sibling. Claude Code's installer does, and died with
+`EACCES: permission denied, mkdir '/home/devuser/.local/share'`.
+
+Ansible's `file:` module has the same property: `state: directory` with an owner
+sets it on the path you named, and any parents it creates along the way get
+whatever the umask says. Listing the parents is the fix, and it is a better one
+than the `user_dir` helper it replaced, because the list is visible in one place
+rather than implied by a function. `file:` also chowns directories that already
+exist, so a re-run repairs a container provisioned before this was understood.
+
+Several roles ensure the list themselves rather than trusting that `user` has
+been re-run since — `--only t3` on an already-provisioned box has to work on
+its own.
 
 ### There is deliberately no fake `xdg-open`
 
@@ -209,7 +367,7 @@ Distribution packages ship whatever npm Node bundles (11.x for Node 24). npm 12
 roles are written against the blocking behaviour — so `roles/node` installs npm
 12 into the user prefix (never `/usr`). Override with `NPM_MAJOR`.
 
-Packages with native code need their install scripts to build. `NPM_ALLOW_SCRIPTS`
+Packages with native code need their install scripts to build. `npm_allow_scripts`
 is a profile setting written into the app user's `~/.npmrc`, and it has to live
 there rather than on a command line, because the installs that matter most are
 ones nobody types: a tool's own service installer or self-updater runs
@@ -250,15 +408,15 @@ including one cloned an hour from now).
 The values live in the profile and are overridable from the environment:
 
 ```bash
-CLAUDE_MODEL=claude-sonnet-5 CLAUDE_EFFORT_LEVEL=high ./setup.sh --only claude
+./provision.sh --only claude -e claude_model=claude-sonnet-5 -e claude_effort_level=high
 ```
 
 **Each key is written only when it is absent.** `/model` and `/effort` inside a
 session write back to this same file, so anything already there is a choice
-somebody made in the app, and re-running `setup.sh` must not silently undo it —
+somebody made in the app, and re-running the playbook must not silently undo it —
 provisioning sets a *starting point*, it does not own the file. To reset a
 container to the profile default, delete the key (or the whole file) and re-run
-`./setup.sh --only claude`.
+`./provision.sh --only claude`.
 
 The role leaves the account default alone when both settings are empty, which is
 what every profile other than `t3` does.
@@ -272,7 +430,7 @@ Three alternatives were considered and rejected:
   once, on the one day they are least equipped to answer.
 - **Documentation only.** A default that must be re-applied by hand on every new
   container is not a default; it is a step to forget.
-- **Forcing the value on every run.** Turns the habit of re-running `setup.sh`
+- **Forcing the value on every run.** Turns the habit of re-provisioning
   into a way to lose a deliberate `/model` switch.
 
 Model IDs age faster than anything else here. A name the account cannot reach
@@ -309,7 +467,11 @@ The one thing it needs from us is the `allow-scripts` line in `~/.npmrc`; left
 alone, `node-pty` never runs `node-gyp rebuild` and the pinned runtime is a t3
 with no working PTY. Its validation is `node <entry> --version`, which does not
 load node-pty and so passes, and you find out when a terminal fails at runtime.
-The `t3` role refuses to run if `NPM_ALLOW_SCRIPTS` does not list what it needs.
+The `t3` role refuses to run if `npm_allow_scripts` does not list what it needs,
+and then refuses again if the `~/.npmrc` on disk does not — two different
+failures, checked separately, because a `--only t3` run that skips `node` never
+revisits the file. The second check is
+`roles/t3/files/check-npmrc-allow-scripts.sh`, which you can run by hand.
 
 `t3 service install` (and every nightly `t3 service update`) also runs
 `loginctl enable-linger` **as the app user**. logind does not take that call on
@@ -338,8 +500,8 @@ success there buys a clean `t3 service install` and pays for it with a
 also installs the polkit daemon (`polkitd` on Debian, `polkit` on RHEL/Arch)
 so the real command still works when something calls it by absolute path or a
 human runs it by hand. Both are ensured *here* rather than in `base`, because a
-role must not depend on another role having been re-run, so `./setup.sh --only
-t3-service` on an already-provisioned box has to work on its own.
+role must not depend on another role having been re-run, so `./provision.sh
+--only t3-service` on an already-provisioned box has to work on its own.
 
 ### What this repo does *not* hand-roll, and why the split is there
 
@@ -537,7 +699,7 @@ systemctl --user daemon-reload
 systemctl --user restart t3code.service
 ```
 
-`./setup.sh --only t3-service` does the same thing. Either server works fine
+`./provision.sh --only t3-service` does the same thing. Either server works fine
 **alone**; the failure is entirely in running two.
 
 ### Rolling back a bad update
@@ -595,8 +757,8 @@ installs both.
 ### `EACCES: permission denied, mkdir '/home/devuser/.local/...'`
 
 A directory in the app user's home is owned by root — see
-[the `user_dir` note](#every-directory-under-the-app-users-home-is-created-with-user_dir).
-Re-run `./setup.sh --only user` to fix the ownership, then re-run the role that
+[the ownership note](#every-component-of-the-app-users-npm-prefix-is-owned-explicitly).
+Re-run `./provision.sh --only user` to fix the ownership, then re-run the role that
 failed.
 
 ```bash

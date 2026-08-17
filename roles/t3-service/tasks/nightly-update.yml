@@ -1,0 +1,41 @@
+---
+# t3's self-update is not automatic — serverUpdateServer is a WebSocket method
+# the app calls, so the box updates when someone taps a button and never
+# otherwise. The timer fires at 04:00 (Persistent=true, so a missed run catches
+# up after boot), installs the latest CLI, and touches the service only if the
+# version changed. See docs/design.md for the two guards the updater carries.
+
+- name: The nightly updater
+  ansible.builtin.copy:
+    src: t3-nightly-update.sh
+    dest: "{{ npm_prefix }}/bin/t3-nightly-update.sh"
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: "0755"
+
+- name: The update units
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "{{ t3_service_unit_dir }}/{{ item }}"
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: "0644"
+  loop:
+    - t3-update.service
+    - t3-update.timer
+  notify: Reload the app user's systemd manager
+
+# The handler runs at the end of the play, and `t3 service install` below needs
+# a manager that has already seen these units. Flush now rather than hoping.
+- name: Reload systemd before anything uses the units
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable the nightly update timer
+  ansible.builtin.systemd:
+    name: t3-update.timer
+    scope: user
+    enabled: true
+    state: started
+  become: true
+  become_user: "{{ app_user }}"
+  environment: "{{ app_user_env }}"

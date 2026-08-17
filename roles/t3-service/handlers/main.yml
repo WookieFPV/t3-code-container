@@ -1,0 +1,8 @@
+---
+- name: Reload the app user's systemd manager
+  ansible.builtin.systemd:
+    daemon_reload: true
+    scope: user
+  become: true
+  become_user: "{{ app_user }}"
+  environment: "{{ app_user_env }}"

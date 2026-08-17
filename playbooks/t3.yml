@@ -1,0 +1,57 @@
+---
+# description: T3 Code server: node, bun, gh, Claude Code, t3 + nightly updates
+#
+# The setup this repo started as.
+#
+# A profile is a role list and some settings, and it is the whole user-facing
+# surface: to build a different kind of box, copy this file and change the list.
+#
+# On ordering and dependencies. These roles are listed in the order they must
+# run, and no role declares dependencies in meta/main.yml — on purpose. Ansible
+# inserts a role dependency into the play and tags it with its dependant's tags,
+# so `--tags claude` would drag base and user along with it. That defeats the
+# one thing --only is for: repairing a single step on a box that is already
+# provisioned. Instead each role states its preconditions with the `preflight`
+# role, which fails with the command to run rather than silently re-running
+# half the profile.
+
+- name: T3 Code dev server
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    # t3's native dependencies need their npm install scripts to build. The node
+    # role writes this into the app user's .npmrc, which is the only place the
+    # installs t3 runs for itself will read it from.
+    npm_allow_scripts: node-pty,msgpackr-extract
+
+    # A fresh box would otherwise start Claude on the account default. That is a
+    # reasonable product default and the wrong one here: this machine exists to
+    # run long agent sessions against real repos. Seeded, not enforced — see
+    # docs/design.md.
+    claude_model: "claude-opus-5[1m]"   # [1m] = the 1M-context variant
+    claude_effort_level: medium         # low | medium | high | xhigh
+
+    # The nightly t3 update timer fires at 04:00 in this timezone.
+    timezone: Etc/UTC
+
+  pre_tasks:
+    - name: Preflight
+      ansible.builtin.import_tasks: ../tasks/preflight.yml
+
+  roles:
+    - {role: base,        tags: [base]}
+    - {role: user,        tags: [user]}
+    - {role: gh,          tags: [gh]}
+    - {role: github-ssh,  tags: [github-ssh]}
+    - {role: node,        tags: [node]}
+    - {role: bun,         tags: [bun]}
+    - {role: claude,      tags: [claude]}
+    - {role: t3,          tags: [t3]}
+    - {role: t3-service,  tags: [t3-service]}
+    - {role: first-login, tags: [first-login]}
+
+  post_tasks:
+    - name: Done
+      ansible.builtin.import_tasks: ../tasks/done.yml

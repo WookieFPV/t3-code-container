@@ -1,0 +1,9 @@
+---
+t3_version: latest
+
+# t3 pulls in native dependencies whose install scripts npm 12 blocks by
+# default. Without them node-pty never runs `node-gyp rebuild` and you get a t3
+# with no working PTY — which fails at runtime, not at install time.
+t3_native_deps:
+  - node-pty
+  - msgpackr-extract
