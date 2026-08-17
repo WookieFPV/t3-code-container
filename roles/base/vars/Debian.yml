@@ -8,6 +8,13 @@
 # means touching three files, which a comment in each is enough to catch.
 
 base_packages:
+  # setfacl. Ansible needs it to become an unprivileged user: the module it is
+  # about to run is written to a temp file owned by root, and handing that file
+  # to the app user is done with an ACL. Without it the task fails with "Failed
+  # to set permissions on the temporary files Ansible needs to create when
+  # becoming an unprivileged user" — every task in the node, bun, claude, t3 and
+  # t3-service roles, none of which CI reaches.
+  - acl
   - apt-transport-https
   - bash-completion
   - bind9-dnsutils

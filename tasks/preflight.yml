@@ -17,6 +17,31 @@
     quiet: true
   tags: always
 
+# Everything interesting in these roles runs as the app user, which means every
+# profile depends on a working privilege drop. When the tool that does it is
+# missing, Ansible reports "Premature end of stream waiting for become success"
+# from whichever task happened to be the first one to escalate — a message that
+# names neither the tool nor the reason, on a box that is already most of the
+# way provisioned. Ask before doing any of that work.
+- name: Look for the tool that drops privileges to the app user
+  ansible.builtin.command:
+    argv: [/bin/sh, -c, "command -v {{ become_exe }} >/dev/null"]
+  register: preflight_become_exe
+  changed_when: false
+  failed_when: false
+  tags: always
+
+- name: Refuse to start without it
+  ansible.builtin.assert:
+    that: preflight_become_exe.rc == 0
+    fail_msg: >-
+      {{ become_exe }} is not installed, and it is what every task that runs as
+      {{ app_user }} needs (become_method in ansible.cfg). Install it — on
+      {{ ansible_os_family }} it is part of {{ 'util-linux' if become_exe == 'su' else become_exe }}
+      — or point become_method and become_exe at something this box does have.
+    quiet: true
+  tags: always
+
 - name: Say what this is running on
   ansible.builtin.debug:
     msg: >-

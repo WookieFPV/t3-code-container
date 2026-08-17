@@ -7,6 +7,8 @@
 # comment in provision.sh.
 
 base_packages:
+  # setfacl — see the comment in vars/Debian.yml.
+  - acl
   - bash-completion
   - bind
   - base-devel

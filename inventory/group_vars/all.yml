@@ -19,6 +19,12 @@
 app_user: devuser
 app_home: "/home/{{ app_user }}"
 
+# The executable the configured become_method needs, for the preflight check in
+# tasks/preflight.yml to look for. Kept in step with become_method in
+# ansible.cfg by hand: Ansible has no variable that reports the method actually
+# in force, and guessing one wrong here would fail every run at task three.
+become_exe: su
+
 # User-owned npm prefix, so `npm i -g` never needs root.
 npm_prefix: "{{ app_home }}/.local"
 

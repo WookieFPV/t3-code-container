@@ -122,7 +122,13 @@ jobs:
           cat >Dockerfile.ci <<EOF
           FROM ${{ matrix.image }}
           ENV DEBIAN_FRONTEND=noninteractive
+          # purge sudo: the Ubuntu images ship it and the Debian ones do not,
+          # and a real LXC container is the Debian case. Ansible's default
+          # become_method is sudo, so leaving it installed on half the matrix
+          # would let the privilege drop to the app user break on the hardware
+          # this repo exists for while CI stayed green. It did, once.
           RUN apt-get update && apt-get install -y systemd systemd-sysv dbus git ca-certificates \
+              && apt-get purge -y sudo \
               && rm -rf /var/lib/apt/lists/*
           CMD ["/sbin/init"]
           EOF
@@ -157,6 +163,23 @@ jobs:
             test -d /run/user/$(id -u devuser)
             runuser -u devuser -- env XDG_RUNTIME_DIR=/run/user/$(id -u devuser) \
               systemctl --user is-system-running --wait
+          '
+
+      # The minimal profile is base + user, and neither role ever runs anything
+      # as the app user — so nothing above this exercises the privilege drop
+      # that the node, bun, claude, t3 and t3-service roles are built on. Do it
+      # explicitly, with the same config a real run uses, on an image with no
+      # sudo. Without this the whole class is untested.
+      - name: becoming the app user works without sudo
+        run: |
+          docker exec ci bash -c '
+            set -eux
+            ! command -v sudo
+            export ANSIBLE_CONFIG=/repo/ansible.cfg
+            ansible -i inventory/local.yml localhost \
+              --become --become-user devuser \
+              -m command -a "id -un" | tee /tmp/become
+            grep -q devuser /tmp/become
           '
 
       # --only is what somebody reaches for to repair one step on a box that is

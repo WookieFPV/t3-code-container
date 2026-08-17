@@ -3,6 +3,8 @@
 # Keep in step with vars/Debian.yml when adding anything.
 
 base_packages:
+  # setfacl — see the comment in vars/Debian.yml.
+  - acl
   - bash-completion
   - bind-utils
   # No build-essential metapackage here; these are what it pulls in that

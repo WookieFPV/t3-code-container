@@ -258,6 +258,16 @@ install; the blast radius is one home directory, and every repo there has a
 remote. Nothing needs root anyway: user systemd units, outbound-only
 networking, ports above 1024, and `npm i -g` into `~/.local`.
 
+There is no sudo on the box at all, which is also why `ansible.cfg` sets
+`become_method = su`. Ansible's default is sudo, and a fresh Debian or Ubuntu
+LXC does not ship it, so the default fails at the first task that runs as the
+app user — an error (`Premature end of stream waiting for become success`) that
+names neither sudo nor the task's real problem. `su` is part of util-linux and
+therefore always present, and root becoming a named user needs no password.
+`tasks/preflight.yml` checks for it before any role runs, and the base role
+installs `acl`, which is what Ansible uses to hand a module file to an
+unprivileged user.
+
 ### Third-party signing keys are pinned
 
 Vendor repositories are verified against fingerprints hard-coded in the role
