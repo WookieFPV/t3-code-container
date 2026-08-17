@@ -26,10 +26,21 @@
 #
 # This is the Arch counterpart of the apt refresh above, not an extra: on Arch
 # the refresh and the upgrade cannot be separated.
-- name: Refresh the package index and upgrade  # noqa package-latest
-  community.general.pacman:
-    update_cache: true
-    upgrade: true
+#
+# Deliberately `command` and not community.general.pacman, which expresses this
+# exactly and was the first attempt. Ansible resolves every module in a task
+# list when it loads the play, *including* tasks whose `when` is false — so one
+# collection module in a role every profile runs makes that collection a hard
+# dependency on Debian, Ubuntu and Fedora too, and Fedora's CI job failed on it
+# immediately. ansible-core-only is the whole reason provision.sh can bootstrap
+# from one distribution package.
+#
+# pacman says " there is nothing to do" when everything is current, which is
+# what keeps a converged run honest rather than reporting a change every time.
+- name: Refresh the package index and upgrade
+  ansible.builtin.command: pacman -Syu --noconfirm
+  register: base_pacman_upgrade
+  changed_when: "'there is nothing to do' not in base_pacman_upgrade.stdout"
   when: ansible_os_family == 'Archlinux'
 
 - name: Install the base packages

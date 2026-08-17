@@ -34,12 +34,6 @@ jobs:
         run: |
           python3 -m pip install --upgrade pip
           python3 -m pip install ansible-core ansible-lint yamllint
-          # Provisioning needs no collections on Debian, Ubuntu or Fedora, which
-          # is the point of the ansible-core-only bootstrap. Arch is the one
-          # exception — community.general owns the pacman module — and the
-          # linters have to be able to resolve it or they cannot check the one
-          # task that uses it.
-          ansible-galaxy collection install community.general
 
       - name: yamllint
         run: yamllint .
