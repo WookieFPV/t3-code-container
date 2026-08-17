@@ -28,3 +28,7 @@ base_packages:
   - wget
 
 base_locale_from_locale_gen: true
+
+# Where the default LANG lives on this family.
+# The systemd convention, and what localectl writes.
+base_locale_conf: /etc/locale.conf

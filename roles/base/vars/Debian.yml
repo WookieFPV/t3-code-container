@@ -40,3 +40,7 @@ base_packages:
 
 # Debian generates locales from a list; RedHat ships them prebuilt in a langpack.
 base_locale_from_locale_gen: true
+
+# Where the default LANG lives on this family.
+# Debian's convention, and what update-locale writes; pam_env reads it at login.
+base_locale_conf: /etc/default/locale

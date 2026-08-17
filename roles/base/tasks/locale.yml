@@ -50,46 +50,27 @@
     - not base_locale_is_generated
 
 # ------------------------------------------------------------- the default
-# Three possible homes, because which one is authoritative depends on the
-# distribution and on whether systemd is running. Checking only the Debian one
-# meant a Fedora box rewrote /etc/locale.conf on every run — harmless, but it is
-# exactly the sort of "converges except for this" that idempotency tests exist
-# to catch.
-- name: What is the default LANG now?
-  ansible.builtin.command:
-    argv:
-      - /bin/sh
-      - -c
-      - |
-        for f in /etc/default/locale /etc/locale.conf; do
-            [ -r "$f" ] || continue
-            # shellcheck disable=SC1090
-            LANG=''; . "$f" 2>/dev/null || true
-            if [ -n "${LANG:-}" ]; then printf '%s' "$LANG"; exit 0; fi
-        done
-        if command -v localectl >/dev/null 2>&1; then
-            localectl status 2>/dev/null | sed -n 's/.*LANG=\([^ ]*\).*/\1/p' | head -1
-        fi
-  register: base_lang_now
-  changed_when: false
-  failed_when: false
-
-- name: Set the default LANG
-  ansible.builtin.command:
-    argv:
-      - /bin/sh
-      - -c
-      - |
-        set -e
-        if command -v update-locale >/dev/null 2>&1; then
-            update-locale "LANG=$1"
-        elif command -v localectl >/dev/null 2>&1 &&
-             localectl set-locale "LANG=$1" 2>/dev/null; then
-            :
-        else
-            printf 'LANG=%s\n' "$1" >/etc/locale.conf
-        fi
-      - sh
-      - "{{ locale }}"
-  when: base_lang_now.stdout | trim != locale
-  changed_when: true
+# One file, chosen per family, written with lineinfile.
+#
+# This started as a pair of shell blocks: one that read the current LANG out of
+# /etc/default/locale, /etc/locale.conf or `localectl status`, and one that set
+# it with update-locale, localectl or a redirect, whichever existed. It was
+# faithful to the bash implementation and it was not idempotent on Arch, where
+# there is no update-locale and `localectl` has no bus to talk to inside a
+# container — so the writer fell through to /etc/locale.conf while the reader
+# never agreed it had landed, and every single run reported a change.
+#
+# Both candidate files are plain KEY=value, which is precisely what lineinfile
+# is for. Writing the family's file directly is what update-locale and localectl
+# would have done anyway, it needs no systemd, and it is idempotent by
+# construction rather than by a comparison that has to be kept in step with the
+# write. base_locale_conf is set in vars/<family>.yml.
+- name: The default LANG
+  ansible.builtin.lineinfile:
+    path: "{{ base_locale_conf }}"
+    regexp: '^LANG='
+    line: "LANG={{ locale }}"
+    create: true
+    owner: root
+    group: root
+    mode: "0644"
