@@ -17,6 +17,13 @@
 # fetch safe. A key GitHub adds that has not been pinned stops the run instead
 # of being silently trusted.
 #
+# Two sources, because api.github.com has outages (a run has failed on a 504
+# from it while github.com itself was serving fine) and a box that cannot
+# provision because a status API is down is a box waiting on somebody else's
+# incident. If the API does not answer we ask the SSH port for its own keys.
+# Neither source is trusted on its own: whatever comes back has to match the
+# pinned fingerprints, which is the same check either way.
+#
 # Exits 0 and prints "changed" or "unchanged" on the last line, which is how the
 # Ansible task decides what to report. Kept as a script because it is the piece
 # somebody has to run by hand the day GitHub rotates a key:
@@ -35,7 +42,7 @@ pinned=("$@")
 # network this container lives on ever blocks port 22.
 HOSTS='github.com,ssh.github.com'
 
-for c in curl jq ssh-keygen; do
+for c in curl jq ssh-keygen ssh-keyscan; do
     command -v "$c" >/dev/null || die "$c is missing — the 'base' role installs it"
 done
 
@@ -43,9 +50,26 @@ fetched=$(mktemp)
 merged=$(mktemp)
 trap 'rm -f "$fetched" "$merged"' EXIT
 
-curl -fsSL https://api.github.com/meta |
-    jq -r --arg h "$HOSTS" '.ssh_keys[] | "\($h) \(.)"' >"$fetched"
-[[ -s $fetched ]] || die "api.github.com/meta returned no ssh_keys"
+# Sorted so the file does not depend on the order a source happened to return
+# the keys in: the two sources disagree about it, and without this a rerun that
+# fell back would rewrite known_hosts and report a change that was not one.
+key_source=api.github.com/meta
+if curl -fsS --max-time 20 --retry 3 --retry-connrefused --retry-all-errors \
+        https://api.github.com/meta 2>/dev/null |
+        jq -r --arg h "$HOSTS" '.ssh_keys[] | "\($h) \(.)"' |
+        sort >"$fetched" && [[ -s $fetched ]]; then
+    :
+else
+    # ssh-keyscan prints the banner it saw as comments on stdout; those would
+    # end up in known_hosts, so keep only the key lines and put our own host
+    # list in front of the key, exactly as the jq above does.
+    key_source="ssh-keyscan (api.github.com did not answer)"
+    ssh-keyscan -T 20 -t rsa,ecdsa,ed25519 github.com 2>/dev/null |
+        awk -v h="$HOSTS" '$1 !~ /^#/ && NF >= 3 { print h, $2, $3 }' |
+        sort >"$fetched" || true
+    [[ -s $fetched ]] || die "neither api.github.com/meta nor ssh-keyscan
+    returned GitHub's host keys — check this box's network access to github.com"
+fi
 
 mapfile -t found < <(ssh-keygen -lf "$fetched" | awk '{print $2}')
 [[ ${#found[@]} -gt 0 ]] || die "could not read fingerprints from the fetched keys"
@@ -58,7 +82,8 @@ for fpr in "${found[@]}"; do
     roles/github-ssh/defaults/main.yml."
     fi
 done
-printf 'GitHub host keys verified (%d pinned key(s))\n' "${#found[@]}"
+printf 'GitHub host keys verified against pinned fingerprints (%d key(s), from %s)\n' \
+    "${#found[@]}" "$key_source"
 
 # This owns GitHub's lines, not the whole file: anything else already in
 # known_hosts (another forge, an internal git host) is carried over. Our own
@@ -84,5 +109,12 @@ if [[ -f $known_hosts ]] && cmp -s "$merged" "$known_hosts"; then
     exit 0
 fi
 
-install -m 0644 -o root -g root "$merged" "$known_hosts"
+# root-owned when we are root, which is how the role runs it. A hand run as
+# yourself against a scratch file is the other documented use, and -o root would
+# fail it after having already written the content — worse than not asking.
+if [[ $(id -u) -eq 0 ]]; then
+    install -m 0644 -o root -g root "$merged" "$known_hosts"
+else
+    install -m 0644 "$merged" "$known_hosts"
+fi
 printf 'changed\n'

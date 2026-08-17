@@ -12,7 +12,7 @@
     name: preflight
   vars:
     preflight_for: github-ssh
-    preflight_commands: [curl, jq, ssh-keygen]
+    preflight_commands: [curl, jq, ssh-keygen, ssh-keyscan]
 
 - name: The host-key script
   ansible.builtin.copy:
@@ -31,7 +31,9 @@
   # The script writes only when the merged content differs, and says which it
   # did on its last line — so this reports honestly rather than "changed" on
   # every run against an API that returns the same three keys every time.
-  changed_when: github_ssh_result.stdout_lines | last == 'changed'
+  # Sliced rather than `| last`, which raises on the empty stdout of a failed
+  # run and replaces the script's error with one about the conditional.
+  changed_when: github_ssh_result.stdout_lines[-1:] == ['changed']
 
 - name: Say what happened
   ansible.builtin.debug:

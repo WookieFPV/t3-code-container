@@ -43,6 +43,21 @@ says() {       # says DESC PATTERN CMD...  — output must match PATTERN
     fi
 }
 
+# Whole-output equality, for the cases where a substring would lie: "changed"
+# is a substring of "unchanged", so `says` cannot tell the two verdicts apart.
+prints() {     # prints DESC EXPECTED CMD...  — output must equal EXPECTED
+    local desc=$1 want=$2; shift 2
+    local out
+    out=$("$@" 2>&1)
+    if [[ $out == "$want" ]]; then
+        ok
+    else
+        bad "$desc
+      expected exactly: $want
+      actual: $out"
+    fi
+}
+
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
@@ -168,11 +183,61 @@ else
 fi
 
 # ------------------------------------------------------------ github-host-keys
-# Only the argument handling: everything else needs the network, and the roles
-# that do are covered by the install-check runs.
 HOST_KEYS="$REPO_DIR/roles/github-ssh/files/github-host-keys.sh"
 fails "github-host-keys with no arguments" "$HOST_KEYS"
 fails "github-host-keys with no fingerprints" "$HOST_KEYS" "$tmp/known_hosts"
+
+# The rest with both sources stubbed on PATH, so the outage path — the one that
+# only runs when api.github.com is down and therefore never gets exercised by
+# an ordinary run — is tested here rather than during the next incident. The
+# key is generated locally: pinning has to be checked against a real
+# fingerprint, and this keeps that true without reaching the network.
+if command -v ssh-keygen >/dev/null; then
+    keys=$tmp/keys; mkdir -p "$keys"
+    ssh-keygen -q -t ed25519 -N '' -C '' -f "$keys/id" </dev/null
+    key_line="github.com $(cut -d' ' -f1,2 "$keys/id.pub")"
+    printf '%s\n' "$key_line" >"$keys/scanned"
+    key_fpr=$(ssh-keygen -lf "$keys/scanned" | awk '{print $2}')
+
+    stub=$tmp/bin; mkdir -p "$stub"
+    # 22 is what `curl -f` exits on an HTTP error, which is how the 504 that
+    # started this arrived.
+    printf '#!/bin/sh\nexit 22\n' >"$stub/curl"
+    printf '#!/bin/sh\nprintf "%%s\\n" "# github.com:22 SSH-2.0-banner" "%s"\n' \
+        "$key_line" >"$stub/ssh-keyscan"
+    chmod 0755 "$stub/curl" "$stub/ssh-keyscan"
+
+    host_keys() { PATH="$stub:$PATH" "$HOST_KEYS" "$@"; }
+    # The verdict the Ansible task reads, which is the last line and nothing
+    # else — checked exactly, so "unchanged" cannot pass for "changed".
+    verdict() { host_keys "$@" 2>/dev/null | tail -n 1; }
+
+    # A separate file per assertion: the script is idempotent by design, so a
+    # run that shares a target with an earlier one can only ever say
+    # "unchanged".
+    says "a dead API falls back to ssh-keyscan" "from ssh-keyscan" \
+        host_keys "$tmp/known_hosts_fallback" "$key_fpr"
+
+    kh=$tmp/known_hosts_merge
+    printf 'gitlab.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAfu\n' >"$kh"
+    prints "and reports that it wrote" "changed" verdict "$kh" "$key_fpr"
+    prints "a second run writes nothing" "unchanged" verdict "$kh" "$key_fpr"
+    succeeds "other forges' entries survive the merge" grep -q '^gitlab\.com ' "$kh"
+    succeeds "the scanned key is pinned under both hostnames" \
+        grep -q '^github\.com,ssh\.github\.com ' "$kh"
+    fails "the banner comment stays out of known_hosts" grep -q '^#' "$kh"
+    fails "an unpinned key stops the run" \
+        host_keys "$tmp/known_hosts_unpinned" "SHA256:notthekeywejustmade"
+    says "and says so" "UNPINNED" \
+        host_keys "$tmp/known_hosts_unpinned" "SHA256:notthekeywejustmade"
+
+    # Both sources silent is the one case where there is nothing safe to do.
+    printf '#!/bin/sh\nexit 1\n' >"$stub/ssh-keyscan"
+    fails "no source at all is a failure, not an empty file" \
+        host_keys "$tmp/known_hosts_nosource" "$key_fpr"
+else
+    printf '\033[33mskip\033[0m ssh-keygen is not installed — host-key tests skipped\n'
+fi
 
 # ---------------------------------------------------------------------- report
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
