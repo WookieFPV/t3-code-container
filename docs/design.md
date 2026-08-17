@@ -563,6 +563,7 @@ gh ssh-key add ~/.ssh/id_ed25519.pub --title "$(hostname -s)"
 git config --global user.name  "..."
 git config --global user.email "..."
 t3 connect link --headless           # answer y to the relay client prompt
+t3 connect publish                   # push notifications / Live Activities
 systemctl --user restart t3code.service
 t3 connect status                    # Environment link: provisioned
 claude
@@ -577,6 +578,11 @@ Two notes the script would otherwise give you:
   `machinectl shell` is not SSH; without it the CLI waits on a
   `http://127.0.0.1:<port>` OAuth callback, which resolves only inside the
   container, for a browser this box does not have.
+- **`t3 connect publish` is not part of linking.** Agent activity is not
+  published until it is asked for, so without it a linked box reaches the phone
+  but never notifies it. Despite the *"Toggle"* in its help text it writes
+  enabled unless `--disable` is passed, so it is safe to re-run; `t3 connect
+  status` reports the state as `Publish agent activity`.
 - **`connect link`, not bare `t3 connect`.** The latter ends by offering to run
   T3 Code in the background, which `roles/t3-service` already set up. A second
   server unit against one `~/.t3` is
