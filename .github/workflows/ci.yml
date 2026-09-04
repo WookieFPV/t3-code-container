@@ -8,7 +8,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: install the linters
         run: |
@@ -50,7 +50,7 @@ jobs:
           elif command -v pacman  >/dev/null; then pacman -Sy --noconfirm git
           fi
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # provision.sh installs ansible-core itself on a real container. Doing it
       # as its own step here keeps a package-manager failure distinguishable
@@ -70,7 +70,7 @@ jobs:
         image: ["debian:12", "debian:13", "ubuntu:24.04"]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: build a systemd image
         run: |
