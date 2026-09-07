@@ -42,6 +42,7 @@
 
   roles:
     - {role: base,        tags: [base]}
+    - {role: earlyoom,    tags: [earlyoom]}
     - {role: user,        tags: [user]}
     - {role: gh,          tags: [gh]}
     - {role: github-ssh,  tags: [github-ssh]}

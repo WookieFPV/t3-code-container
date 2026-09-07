@@ -2,6 +2,12 @@
 t3_service_unit_dir: "{{ app_home }}/.config/systemd/user"
 t3_home: "{{ app_home }}/.t3"
 
+# The memory-guard drop-in guarantees this much of the session host's cgroup
+# stays resident under memory pressure. See the header of
+# files/memory-guard.conf for why this is a floor and not a limit.
+t3_service_memory_min: 400M
+
+
 # The polkit daemon package. Debian and Ubuntu call it polkitd; everyone else
 # calls it polkit.
 t3_service_polkit_package: "{{ 'polkitd' if ansible_os_family == 'Debian' else 'polkit' }}"

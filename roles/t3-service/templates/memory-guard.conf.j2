@@ -1,0 +1,27 @@
+# MemoryMin: the app user's session host survives memory pressure.
+#
+# What MemoryMin buys. Under memory pressure the kernel reclaims pages from
+# the least-protected cgroup first. The t3 server, its cloudflared connector
+# and every agent session live in this unit's cgroup — exactly the processes
+# whose stalls read as "connection dropped" from the outside. MemoryMin is
+# what makes earlyoom's job easier without either knowing about the other:
+# reclaim hits the build daemons and browser tabs first, and this cgroup's
+# first 400 MB are exempt.
+#
+# It is a shield, not a killer: MemoryMin never *causes* pressure and never
+# kills anything. earlyoom (system-level, the earlyoom role) is the response
+# when memory is genuinely gone; this drop-in is what keeps the tunnel and
+# session host healthy while earlyoom works.
+#
+# Why a drop-in and not our own unit: docs/design.md, "The server runs under
+# t3's own unit" — the repo never writes t3code.service itself, because t3
+# owns that file and tracks its own changes. drop-in/ needs none of t3's
+# install machinery and survives a 't3 service update' that rewrites the unit.
+# systemd's own extension point: the directory and file below it are ours.
+#
+# KillMode, OOMPolicy and Restart stay t3's; OOMPolicy=continue is already
+# right: a greedy child killed by the kernel or earlyoom must not take the
+# whole session host down with it.
+
+[Service]
+MemoryMin={{ t3_service_memory_min }}

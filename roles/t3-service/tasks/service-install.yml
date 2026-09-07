@@ -7,6 +7,28 @@
 # The pinned runtime is a full `npm install` of t3 including a node-gyp build of
 # node-pty, so a first run here takes a few minutes.
 
+# Before the install, not after: on a fresh box the service first starts below
+# and a runtime set-property against a unit the user manager has not loaded
+# would be a lost cause. drop-in/ is ours (see the header of the file for
+# why this is a drop-in and not our own unit) — the file belongs to this role,
+# the unit stays t3's.
+- name: The memory-guard drop-in directory
+  ansible.builtin.file:
+    path: "{{ t3_service_unit_dir }}/t3code.service.d"
+    state: directory
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: "0755"
+
+- name: The memory-guard drop-in
+  ansible.builtin.template:
+    src: memory-guard.conf.j2
+    dest: "{{ t3_service_unit_dir }}/t3code.service.d/memory-guard.conf"
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: "0644"
+  notify: Reload the app user's systemd manager
+
 - name: Install t3's background service
   ansible.builtin.command: t3 service install
   become: true

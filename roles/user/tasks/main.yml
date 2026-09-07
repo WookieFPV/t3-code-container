@@ -162,3 +162,43 @@
   loop:
     - 'export PATH="$HOME/.local/bin:$PATH"'
     - 'export XDG_RUNTIME_DIR=/run/user/$(id -u)'
+
+# ------------------------------------------------------------- build tool caps
+# The global JVM heap caps behind the memory story. The npm Gradle defaults
+# let every project spawn a 2 GB daemon — two or three daemons plus a Kotlin
+# compiler is exactly how a 12 GB box dies of swap thrash and reads as a
+# network drop. Capping at the source (the Maven/Gradle-wide file in the user's
+# home) means every repo cloned on this box inherits the caps with no
+# per-project config to remember.
+#
+# Seeded, never overwritten — same policy as claude settings: a file already
+# present is a choice somebody made, and re-running this role must not undo
+# it. Delete the file and re-run './provision.sh --only user' to start over.
+- name: Is the Gradle user config there already?
+  ansible.builtin.stat:
+    path: "{{ app_home }}/.gradle/gradle.properties"
+  register: user_gradle_props
+
+- name: Seed the Gradle heap caps
+  ansible.builtin.copy:
+    content: |
+      # Provisioned defaults, tuned for a box shared with agent sessions.
+      # A project's own gradle.properties overrides these.
+      org.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=512m
+      # Kotlin compiles inside the Gradle daemon instead of spawning another
+      # 1 GB daemon.
+      kotlin.compiler.execution.strategy=in-process
+      org.gradle.workers.max=4
+    dest: "{{ app_home }}/.gradle/gradle.properties"
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: "0644"
+  when: not user_gradle_props.stat.exists
+
+- name: Note existing gradle.properties left alone
+  ansible.builtin.debug:
+    msg: >-
+      {{ app_home }}/.gradle/gradle.properties already exists — leaving it
+      alone. It overrides the memory caps; check its jvmargs if builds ever
+      freeze the box.
+  when: user_gradle_props.stat.exists

@@ -1,0 +1,65 @@
+---
+# earlyoom: kill the memory hog before the box dies of swap thrash.
+#
+# An agent box's worst failure mode is not a crash, it is the freeze that
+# looks like a network drop: memory fills, the box burns every cycle swapping,
+# the SSH session times out and the tunnel drops, and by the time anyone gets
+# a prompt back the kernel OOM killer has not even fired. earlyoom closes that
+# gap — it acts on the memory counters long before the thrash point.
+#
+# What it is measured against: the real-world incident this was written for
+# was three JVM build daemons at the npm-default 2 GB heap on a 12 GB box —
+# swap full, load average 40, connection gone. The --prefer/--avoid patterns
+# in files/earlyoom-default encode the lesson: prefer the JVMs, never touch
+# the things that carry your way back in.
+#
+# Self-sufficient for repair runs: it installs its own package (the one
+# deliberate exception to base owning system packages, documented in
+# files/earlyoom-default), so './provision.sh --only earlyoom' works on a box
+# that was provisioned before this role existed.
+
+- name: Install earlyoom
+  ansible.builtin.package:
+    name: earlyoom
+    state: present
+
+- name: The tuned configuration
+  ansible.builtin.copy:
+    src: earlyoom-default
+    dest: /etc/default/earlyoom
+    owner: root
+    group: root
+    mode: "0644"
+  register: earlyoom_config
+
+# The Debian unit reads this EnvironmentFile at start. A config change that
+# only takes effect after the next boot is a change nobody notices, so re-run
+# it before the restart decision below.
+- name: Pick up a changed configuration
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: earlyoom_config.changed
+
+- name: Enabled and running
+  ansible.builtin.systemd:
+    name: earlyoom
+    enabled: true
+    state: "{{ 'restarted' if earlyoom_config.changed else 'started' }}"
+
+# A final is-active rather than the module's own report: the assert below is
+# what a human reads when the unit did not come up, and one check that runs
+# after every path into the running state beats an in-task failure message
+# per path. We are querying, not changing — the systemd module asks about
+# desired state, this reports observed state.
+- name: Confirm earlyoom is watching with the tuned thresholds  # noqa command-instead-of-module
+  ansible.builtin.command: systemctl is-active earlyoom
+  register: earlyoom_active
+  changed_when: false
+
+- name: Fail loudly if earlyoom is not running
+  ansible.builtin.assert:
+    that: earlyoom_active.stdout | trim == 'active'
+    fail_msg: >-
+      earlyoom did not come up. Most likely a bad regex in
+      /etc/default/earlyoom — check 'journalctl -u earlyoom -n 20'.
+    quiet: true

@@ -18,6 +18,7 @@
 
   roles:
     - {role: base, tags: [base]}
+    - {role: earlyoom, tags: [earlyoom]}
     - {role: user, tags: [user]}
 
   post_tasks:

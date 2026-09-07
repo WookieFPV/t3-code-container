@@ -1,0 +1,45 @@
+# /etc/default/earlyoom, tuned for a box that runs long agent sessions.
+#
+# The problem this solves. A system with swap does not die of the kernel OOM
+# killer — it dies of swap thrash first: once memory runs out, the box spends
+# every second swapping pages in and out, the network connection times out
+# because nobody gets scheduled, and by the time the kernel's OOM killer would
+# fire the box has already appeared dead to everyone on the other end. The
+# kernel OOM killer only steps in when an allocation *fails*; earlyoom acts
+# much earlier, watching PSI and the memory counters every 100 ms, and SIGTERMs
+# the largest hog while the box is still responsive enough to notice.
+#
+# Why this role installs its own package instead of leaving it to base, where
+# every other system package lives: same reason polkit is in t3-service — a
+# role must not depend on another role having been re-run since, so
+# './provision.sh --only earlyoom' has to be able to install it itself.
+#
+# Debian and Fedora call it earlyoom; so does Arch (extra). One name, no vars
+# file.
+
+# TERM when free RAM < 10% and swap < 15%; SIGKILL below 5% / 7%. On a 12 GB
+# box that acts roughly 1 GB before the thrash point — early enough that the
+# box still responds, late enough that a build that is merely big still
+# finishes.
+#
+# --prefer: every JVM (Gradle + Kotlin build daemons) shows up as one "java"
+# process, and they are the recurring hog on this profile — three daemons at
+# the npm default -Xmx2048m is what froze such a box mid-build. Earlyoom picks
+# the largest matching --prefer process first, so a tie is broken toward the
+# build daemons rather than a long-lived session.
+#
+# --avoid: the processes whose death is the actual incident. sshd and systemd
+# are how you reach the box; cloudflared is the tunnel the session comes in
+# through; .t3/ matches the t3 server runtime and launcher (the session host);
+# opencode matches the agent backends. Killing an agent session is annoying and
+# recoverable; killing one more agent instead of the whole box is still what
+# earlyoom is for — but when the hog is not a JVM, we would rather it look
+# further down its list than take out the session host.
+#
+# systemd expands $EARLYOOM_ARGS bare from this EnvironmentFile: no outer
+# shell, no inner quote stripping, every whitespace-separated word one argv
+# entry. The regexes carry no spaces, so they stay single words; the backslash
+# in \. reaches earlyoom as a literal backslash-dot, which is the regex we
+# want. Validate with: systemctl cat earlyoom.service && earlyoom --help
+
+EARLYOOM_ARGS="-m 10,5 -s 15,7 -r 3600 --prefer bin/java --avoid (^|/)(sshd|systemd)|cloudflared|/\.t3/|opencode"
